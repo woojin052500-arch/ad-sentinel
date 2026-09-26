@@ -40,6 +40,38 @@ def test_real_mois_crawl_has_no_findings():
     assert all(h.endswith((".or.kr", ".re.kr", ".org", ".com")) for h in unknown)
 
 
+def test_unchecked_iframe_in_real_mois_crawl():
+    sample = json.loads((FIXTURES / "mois_sample.json").read_text(encoding="utf-8"))
+    result = detect(sample)
+    assert result["summary"]["unchecked"] == 1
+    item = result["unchecked"][0]
+    assert item["kind"] == "iframe" and item["frame_path"] == ["#tab4 > div > iframe"]
+    assert item["url"].startswith("https://www.korea.kr/etc/news_widget.do")
+    assert item["trusted_domain"] is True
+    assert item["pages"] == ["https://www.mois.go.kr/"]
+    assert result["stats"]["pages"] == 10 and result["stats"]["iframes"] == 1
+
+
+def test_unchecked_areas_are_grouped_and_include_skipped_frames_and_robots():
+    frame = {"frame_url": "http://ads.invalid/x", "src": "http://ads.invalid/x", "loaded": False,
+             "frame_path": ["#side > iframe"], "is_main": False, "error": "추출 시간 초과 (5.0s)", "timed_out": True}
+    pages = [dict(_page(START + f"p{i}.do"), frames=[frame], frames_skipped=[]) for i in range(2)]
+    pages.append(dict(_page(START + "p9.do"), frames=[], frames_skipped=[
+        {"frame_url": "http://more.invalid/", "reason": "프레임 수 상한(20개) 초과"}]))
+    pages.append(dict(_page(START + "bad.do"), error="net::ERR_CONNECTION_RESET"))
+    crawl = _crawl(*pages)
+    crawl["skipped"] = [{"url": START + "admin/", "reason": "robots.txt"}]
+    result = detect(crawl)
+    kinds = {u["kind"]: u for u in result["unchecked"]}
+    hidden_tab = next(u for u in result["unchecked"] if u["url"] == "http://ads.invalid/x")
+    assert hidden_tab["page_count"] == 2
+    assert "불러와지지 않아" in hidden_tab["reason"] and hidden_tab["trusted_domain"] is False
+    assert any("프레임 수 상한" in u["reason"] for u in result["unchecked"])
+    assert kinds["page"]["url"] == START + "bad.do"
+    assert kinds["robots"]["url"] == START + "admin/"
+    assert result["summary"]["unchecked"] == 4
+
+
 def test_default_whitelist_excludes_or_ac_re_but_user_can_add():
     from ad_sentinel.detector.domains import is_whitelisted, load_whitelist
 

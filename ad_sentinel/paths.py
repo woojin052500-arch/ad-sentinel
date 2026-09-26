@@ -23,3 +23,7 @@ def setup_bundled_browser() -> None:
     bundled = app_dir() / "ms-playwright"
     if bundled.is_dir() and "PLAYWRIGHT_BROWSERS_PATH" not in os.environ:
         os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(bundled)
+
+
+def asset_path(name: str) -> Path:
+    return Path(__file__).resolve().parent / "assets" / name

@@ -41,6 +41,7 @@ ADVICE = {
     VISIBLE: "화면에 노출된 광고입니다. 게시글·댓글을 삭제하고 작성 경로(게시판, 댓글 등)의 스팸 차단 설정을 점검하세요.",
 }
 MAX_CHILD_LINKS = 20
+UNCHECKED_LABELS = {"page": "페이지", "iframe": "iframe", "robots": "수집 금지 주소"}
 
 
 @dataclass
@@ -83,6 +84,8 @@ class Detector:
         for i, f in enumerate(findings, 1):
             f["id"] = i
 
+        unchecked = self._unchecked_areas()
+        stats = self._stats(len(unchecked))
         by_category = Counter(f["category"] for f in findings)
         by_pattern = Counter(f["pattern_label"] for f in findings)
         return {
@@ -103,12 +106,80 @@ class Detector:
                 "suspect": sum(1 for f in findings if f["level"] == SUSPECT),
                 "by_category": dict(by_category),
                 "by_pattern": dict(by_pattern),
+                "unchecked": len(unchecked),
             },
+            "stats": stats,
+            "unchecked": unchecked,
             "external_domains": [
                 {"host": host, "count": n, "whitelisted": is_whitelisted(host, self.whitelist)}
                 for host, n in self.external_hosts.most_common()
             ],
             "findings": findings,
+        }
+
+    def _unchecked_areas(self) -> list[dict]:
+        groups: dict[tuple, dict] = {}
+
+        def add(kind: str, page_url: str, url: str, frame_path: list, reason: str):
+            key = (kind, url, tuple(frame_path), reason)
+            if key not in groups:
+                host = get_host(url)
+                groups[key] = {
+                    "kind": kind, "kind_label": UNCHECKED_LABELS[kind], "url": url, "frame_path": list(frame_path),
+                    "reason": reason, "host": host,
+                    "trusted_domain": bool(host) and is_whitelisted(host, self.whitelist), "pages": [],
+                }
+            if page_url not in groups[key]["pages"]:
+                groups[key]["pages"].append(page_url)
+
+        for page in self.crawl.get("pages", []):
+            if page.get("error"):
+                add("page", page["url"], page["url"], [], f"페이지를 열지 못함: {page['error']}")
+                continue
+            for f in page.get("frames", []):
+                url = f.get("frame_url") or f.get("src", "") or _iframe_src(page, f.get("frame_path", []))
+                kind = "page" if f.get("is_main") else "iframe"
+                if f.get("error"):
+                    if not f.get("is_main") and f.get("loaded") is False:
+                        reason = "iframe이 불러와지지 않아 내용을 확인하지 못함 (숨겨진 탭 안의 iframe 등)"
+                    elif f.get("timed_out"):
+                        reason = "응답이 없어 제한 시간 안에 내용을 확인하지 못함"
+                    else:
+                        reason = f"내용을 읽지 못함 ({f['error']})"
+                    add(kind, page["url"], url, f.get("frame_path", []), reason)
+                elif f.get("total_elements") and f.get("scanned", 0) < f["total_elements"]:
+                    add(kind, page["url"], url, f.get("frame_path", []),
+                        f"일부만 검사함 (요소 {f['total_elements']}개 중 {f['scanned']}개)")
+            for skipped in page.get("frames_skipped", []):
+                add("iframe", page["url"], skipped.get("frame_url", ""), [], skipped["reason"])
+        for skipped in self.crawl.get("skipped", []):
+            add("robots", skipped["url"], skipped["url"], [], "robots.txt에서 수집을 막아 둔 주소라 점검하지 않음")
+
+        result = list(groups.values())
+        for item in result:
+            item["page_count"] = len(item["pages"])
+        return result
+
+    def _stats(self, unchecked_count: int) -> dict:
+        pages = self.crawl.get("pages", [])
+        frames = [f for p in pages for f in p.get("frames", [])]
+        meta = self.crawl.get("meta", {})
+        duration = None
+        try:
+            started = datetime.fromisoformat(meta["started_at"])
+            finished = datetime.fromisoformat(meta["finished_at"])
+            duration = int((finished - started).total_seconds())
+        except (KeyError, TypeError, ValueError):
+            pass
+        return {
+            "pages": len(pages),
+            "page_errors": sum(1 for p in pages if p.get("error")),
+            "frames": len(frames),
+            "iframes": sum(1 for f in frames if not f.get("is_main") and not f.get("error")),
+            "elements_scanned": sum(f.get("scanned", 0) for f in frames),
+            "unchecked": unchecked_count,
+            "duration_sec": duration,
+            "stopped_by_user": bool(meta.get("stopped_by_user")),
         }
 
     def _page_findings(self, page: dict) -> list[dict]:
@@ -263,6 +334,15 @@ class Detector:
             "advice": ADVICE[pattern],
             "page_url": page_url,
         }
+
+
+def _iframe_src(page: dict, frame_path: list[str]) -> str:
+    if not frame_path:
+        return ""
+    for e in page.get("elements", []):
+        if e["type"] == "iframe" and e["selector"] == frame_path[-1] and e.get("frame_path", []) == frame_path[:-1]:
+            return e.get("src", "")
+    return ""
 
 
 def _unique(params: list[tuple[str, str]]) -> list[tuple[str, str]]:

@@ -19,6 +19,7 @@ from ad_sentinel.paths import setup_bundled_browser
 log = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[int, int, str], None]
+PageCallback = Callable[[int, dict], None]
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -36,9 +37,11 @@ class Crawler:
         config: CrawlConfig,
         on_progress: ProgressCallback | None = None,
         stop_event: threading.Event | None = None,
+        on_page: PageCallback | None = None,
     ):
         self.config = config
         self.on_progress = on_progress
+        self.on_page = on_page
         self.stop_event = stop_event or threading.Event()
         self.robots = RobotsChecker() if config.respect_robots else None
 
@@ -105,6 +108,8 @@ class Crawler:
                     page_result, links = self._crawl_page(context, url, depth)
                     page_result["found_on"] = found_on
                     result["pages"].append(page_result)
+                    if self.on_page:
+                        self.on_page(len(result["pages"]), page_result)
 
                     if page_result["final_url"]:
                         seen.add(page_result["final_url"])
@@ -144,6 +149,7 @@ class Crawler:
             "timed_out": False,
             "offsite_redirect": False,
             "timings": {},
+            "frames_skipped": [],
             "frames": [],
             "elements": [],
         }
@@ -182,12 +188,20 @@ class Crawler:
             frames = page.frames
             if len(frames) > cfg.max_frames_per_page:
                 log.warning("  프레임 %d개 중 %d개만 추출", len(frames), cfg.max_frames_per_page)
+                page_result["frames_skipped"] = [
+                    {"frame_url": f.url, "reason": f"프레임 수 상한({cfg.max_frames_per_page}개) 초과"}
+                    for f in frames[cfg.max_frames_per_page:]
+                ]
                 frames = frames[: cfg.max_frames_per_page]
             for i, frame in enumerate(frames, 1):
                 if remaining_ms() < 500:
                     page_result["timed_out"] = True
                     log.warning("  페이지 제한 시간(%ss) 초과 → 남은 프레임 %d개 건너뜀",
                                 cfg.page_total_timeout_sec, len(frames) - i + 1)
+                    page_result["frames_skipped"] += [
+                        {"frame_url": f.url, "reason": f"페이지 제한 시간({cfg.page_total_timeout_sec:g}초) 초과"}
+                        for f in frames[i - 1:]
+                    ]
                     break
                 self._extract_frame(frame, page_result, i, len(frames), remaining_ms())
             page_result["timings"]["extract"] = round(time.monotonic() - t, 2)

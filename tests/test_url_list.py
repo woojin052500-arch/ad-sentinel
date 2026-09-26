@@ -65,10 +65,11 @@ def test_list_mode_checks_only_listed_urls():
     threading.Thread(target=server.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{server.server_port}/"
     urls = [base + "home.html?play=%EB%B0%94%EC%B9%B4%EB%9D%BC%EB%B6%84%EC%84%9D", base + "index.html"]
-    progress = []
+    progress, pages = [], []
     try:
         config = CrawlConfig(url_list=urls, delay_sec=0, render_wait_ms=300, networkidle_timeout_ms=2000)
-        crawl = Crawler(config, on_progress=lambda d, t, u: progress.append((d, t))).run()
+        crawl = Crawler(config, on_progress=lambda d, t, u: progress.append((d, t)),
+                        on_page=lambda i, p: pages.append((i, p["url"]))).run()
     finally:
         server.shutdown()
 
@@ -77,6 +78,7 @@ def test_list_mode_checks_only_listed_urls():
     assert [p["url"] for p in crawl["pages"]] == urls
     assert all(p["found_on"] == "URL 목록" for p in crawl["pages"])
     assert progress[0] == (0, 2) and progress[-1] == (2, 2)
+    assert pages == [(1, urls[0]), (2, urls[1])]
     report = detect(crawl)
     assert report["meta"]["mode"] == "list"
     assert {f["pattern_label"] for f in report["findings"]} == {"URL 파라미터 반사"}
