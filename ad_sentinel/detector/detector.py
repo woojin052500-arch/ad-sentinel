@@ -6,6 +6,7 @@ from ad_sentinel import __version__
 from ad_sentinel.crawler.url_utils import get_host, is_same_site
 from ad_sentinel.detector.domains import is_whitelisted, load_whitelist, suspicious_domain
 from ad_sentinel.detector.keywords import find_keywords, has_contact
+from ad_sentinel.detector.variants import analyze, evidence_label
 from ad_sentinel.detector.reflection import is_search_param, query_params, reflected_params, strip_values
 
 HIGH = "high"
@@ -244,9 +245,10 @@ class Detector:
         evidence = []
         categories = []
 
-        for kw in find_keywords(text):
-            evidence.append(_ev("keyword", f"{kw.category} 키워드 '{kw.word}'", kw.weight))
-            categories.extend([kw.category] * kw.weight)
+        for hit in analyze(text):
+            kind = "variant" if hit.variant else "keyword"
+            evidence.append(_ev(kind, evidence_label(hit), hit.weight))
+            categories.extend([hit.keyword.category] * hit.weight)
 
         urls = _urls_of(rec)
         untrusted = [u for u in urls if not self.is_trusted(u)]

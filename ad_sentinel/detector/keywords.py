@@ -35,6 +35,10 @@ def _kw(word, category, weight, strict=False, not_after=""):
     return Keyword(word, category, weight, _compile(word, weight, strict, not_after))
 
 
+def _en(word, category, weight):
+    return Keyword(word, category, weight, re.compile(rf"(?<![a-z]){word}", re.IGNORECASE))
+
+
 KEYWORDS = [
     _kw("카지노", GAMBLING, STRONG),
     _kw("바카라", GAMBLING, STRONG),
@@ -97,6 +101,13 @@ KEYWORDS = [
     _kw("낙태약", DRUG, STRONG),
     _kw("미프진", DRUG, STRONG),
     _kw("발기부전", DRUG, WEAK),
+
+    _en("casino", GAMBLING, STRONG),
+    _en("baccarat", GAMBLING, STRONG),
+    _en("powerball", GAMBLING, STRONG),
+    _en("porn", ADULT, STRONG),
+    _en("viagra", DRUG, STRONG),
+    _en("cialis", DRUG, STRONG),
 ]
 
 CONTACT_PATTERN = re.compile(
@@ -107,7 +118,7 @@ CONTACT_PATTERN = re.compile(
 )
 
 
-def find_keywords(text: str) -> list[Keyword]:
+def find_keyword_spans(text: str) -> list[tuple[Keyword, int, int]]:
     if not text:
         return []
     found = []
@@ -118,8 +129,15 @@ def find_keywords(text: str) -> list[Keyword]:
             if any(s <= span[0] and span[1] <= e for s, e in covered):
                 continue
             covered.append(span)
-            if kw not in found:
-                found.append(kw)
+            found.append((kw, m.start(), m.end()))
+    return found
+
+
+def find_keywords(text: str) -> list[Keyword]:
+    found = []
+    for kw, _, _ in find_keyword_spans(text):
+        if kw not in found:
+            found.append(kw)
     return found
 
 
