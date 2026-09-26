@@ -91,7 +91,9 @@ def test_detector_on_sample_site(result):
     for content in ["온라인 카지노 바로가기", "토토사이트 추천", "성인 무료 영상", "바카라 사이트",
                     "슬롯 무료 체험", "홀덤 입금 보너스 100%", "먹튀 없는 안전놀이터 가입코드 777"]:
         assert by_content[content]["level"] == "high", content
-    assert any(f["urls"] == ["http://bet.invalid/"] for f in report["findings"])
+    assert by_content["스포츠 베팅 바로가기"]["level"] == "high"
+    assert by_content["스포츠 베팅 바로가기"]["urls"] == ["http://bet.invalid/"]
+    assert "바로가기" not in by_content
     assert all("정상적인" not in f["content"] for f in report["findings"])
 
 

@@ -35,7 +35,29 @@ def test_real_mois_crawl_has_no_findings():
     result = detect(sample)
     assert result["findings"] == []
     assert len(result["external_domains"]) >= 50
-    assert all(d["whitelisted"] for d in result["external_domains"])
+    unknown = {d["host"] for d in result["external_domains"] if not d["whitelisted"]}
+    assert "www.nia.or.kr" in unknown and "www.kidi.re.kr" in unknown
+    assert all(h.endswith((".or.kr", ".re.kr", ".org", ".com")) for h in unknown)
+
+
+def test_default_whitelist_excludes_or_ac_re_but_user_can_add():
+    from ad_sentinel.detector.domains import is_whitelisted, load_whitelist
+
+    default = load_whitelist(path=FIXTURES / "none.txt")
+    assert is_whitelisted("www.mois.go.kr", default)
+    assert is_whitelisted("www.korea.kr", default)
+    assert is_whitelisted("www.youtube.com", default)
+    for host in ["www.nia.or.kr", "www.snu.ac.kr", "www.kidi.re.kr"]:
+        assert not is_whitelisted(host, default)
+    assert is_whitelisted("www.nia.or.kr", load_whitelist(["nia.or.kr"], path=FIXTURES / "none.txt"))
+
+
+def test_whitelist_file_is_read(tmp_path):
+    from ad_sentinel.detector.domains import is_whitelisted, load_whitelist
+
+    path = tmp_path / "whitelist.txt"
+    path.write_text("# 우리 협회\nkdemo.or.kr\n", encoding="utf-8")
+    assert is_whitelisted("www.kdemo.or.kr", load_whitelist(path=path))
 
 
 @pytest.mark.parametrize("text", [
@@ -88,6 +110,17 @@ def test_visible_comment_with_several_keywords_is_high():
     f = _score(_rec("text", "먹튀 없는 안전놀이터 가입코드 777"))
     assert f["level"] == HIGH
     assert {e["label"] for e in f["evidence"]} >= {"도박 키워드 '먹튀'", "도박 키워드 '안전놀이터'"}
+
+
+def test_paragraph_keyword_and_inner_link_domain_are_one_finding():
+    text = _rec("text", "스포츠 베팅 바로가기", selector="#list > p")
+    link = _rec("link", "바로가기", selector="#list > p > a", href="http://bet.invalid/")
+    result = detect(_crawl(_page(START, text, link)))
+    assert len(result["findings"]) == 1
+    f = result["findings"][0]
+    assert f["selector"] == "#list > p" and f["level"] == HIGH
+    assert {e["kind"] for e in f["evidence"]} == {"keyword", "domain", "external"}
+    assert f["urls"] == ["http://bet.invalid/"]
 
 
 def test_suspicious_domain_link_needs_review():

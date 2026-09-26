@@ -69,14 +69,42 @@ def test_reflected_spam_page_is_detected(report):
         assert any(e["kind"] == "reflection" for e in f["evidence"])
     text = next(f for f in spam if f["type"] == "text")
     assert text["selector"] == "#content > h2"
-    assert result["summary"]["by_pattern"] == {"URL 파라미터 반사": 3}
+    assert result["summary"]["by_pattern"] == {"URL 파라미터 반사": 2, "악용 가능 지점": 1}
 
 
 def test_search_page_reflecting_keyword_is_reflection_surface(report):
     _, result = report
     search = [f for f in result["findings"] if "search.html" in f["pages"][0]]
     assert len(search) == 1
-    assert search[0]["reflected_params"] == [{"name": "q", "value": "카지노 규제"}]
+    f = search[0]
+    assert f["reflected_params"] == [{"name": "q", "value": "카지노 규제"}]
+    assert f["pattern"] == "reflection_surface" and f["pattern_label"] == "악용 가능 지점"
+    assert f["level"] == "suspect" and f["level_label"] == "검토 필요"
+    assert "입력값을 그대로 출력하지 않도록 조치" in f["advice"]
+
+
+def _score_reflection(content, url):
+    from ad_sentinel.detector import Detector
+
+    rec = {"type": "text", "content": content, "selector": "#result > p", "frame_path": [], "frame_url": url}
+    return Detector({"meta": {"start_url": url}, "pages": []}).score(rec, params=query_params(url))
+
+
+def test_spam_payload_in_search_param_is_still_ad():
+    url = "http://x.go.kr/search.do?query=%EB%B0%94%EC%B9%B4%EB%9D%BC%EC%82%AC%EC%9D%B4%ED%8A%B8+%ED%85%94%EB%A0%88%EA%B7%B8%EB%9E%A8+%40bet777"
+    f = _score_reflection("'바카라사이트 텔레그램 @bet777' 검색 결과", url)
+    assert f["pattern"] == "param_reflection" and f["level"] == "high"
+
+
+def test_non_search_param_reflecting_keyword_is_ad():
+    f = _score_reflection("바카라분석", GONGDAN)
+    assert f["pattern"] == "param_reflection" and f["level"] == "high"
+
+
+def test_search_param_with_other_evidence_is_ad():
+    url = "http://x.go.kr/search.do?q=%EC%B9%B4%EC%A7%80%EB%85%B8"
+    f = _score_reflection("카지노 검색 결과 - 먹튀 없는 곳", url)
+    assert f["pattern"] == "param_reflection" and f["level"] == "high"
 
 
 def test_normal_reflection_is_not_reported(report):

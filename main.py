@@ -6,11 +6,13 @@ from ad_sentinel.config import CrawlConfig
 from ad_sentinel.crawler import Crawler
 from ad_sentinel.detector import DetectConfig, detect
 from ad_sentinel.storage import load_json, save_json
+from ad_sentinel.url_list import load_url_list
 
 
 def parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="AD-Sentinel", description="공공 웹사이트 불법광고 탐지 도구")
     p.add_argument("url", nargs="?", help="탐색을 시작할 URL")
+    p.add_argument("--url-list", default=None, help="URL 목록 점검: txt/csv/서치 콘솔 내보내기(zip) 파일의 주소만 점검")
     p.add_argument("--from-json", default=None, help="크롤링 없이 기존 크롤링 결과 JSON으로 탐지만 실행")
     p.add_argument("--max-pages", type=int, default=30, help="최대 방문 페이지 수 (기본 30)")
     p.add_argument("--depth", type=int, default=3, help="링크를 따라갈 최대 깊이 (기본 3)")
@@ -25,14 +27,18 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--show-browser", action="store_true", help="브라우저 창을 띄워서 실행")
     p.add_argument("--browser", default="", help="브라우저 실행 파일 경로 (기본: 자동 탐색)")
     args = p.parse_args(argv)
-    if not args.url and not args.from_json:
-        p.error("URL 또는 --from-json 중 하나가 필요합니다.")
+    if not args.url and not args.from_json and not args.url_list:
+        p.error("URL, --url-list, --from-json 중 하나가 필요합니다.")
     return args
 
 
 def crawl(args) -> dict | None:
+    url_list = load_url_list(args.url_list) if args.url_list else []
+    if args.url_list:
+        print(f"목록 파일에서 주소 {len(url_list)}개를 읽었습니다.")
     config = CrawlConfig(
-        start_url=args.url,
+        start_url=args.url or "",
+        url_list=url_list,
         max_pages=args.max_pages,
         max_depth=args.depth,
         delay_sec=args.delay,
@@ -62,6 +68,8 @@ def print_report(report: dict) -> None:
     print(f"\n탐지 결과: {s['findings']}건 (불법광고 의심 {s['high']}건, 검토 필요 {s['suspect']}건)")
     for f in report["findings"][:30]:
         print(f"  [{f['level_label']}] {f['pattern_label']} · {f['category']} {f['score']}점 | {f['content'][:60]}")
+        if f["pattern"] == "reflection_surface":
+            print(f"      안내: {f['advice']}")
         if f["reflected_params"]:
             print(f"      반사된 파라미터: {', '.join(p['name'] + '=' + p['value'] for p in f['reflected_params'])}")
         print(f"      위치: {f['location_label']} | {' > '.join(f['frame_path'] + [f['selector']])}")
@@ -72,6 +80,11 @@ def print_report(report: dict) -> None:
 
 
 def main(argv=None) -> int:
+    if argv is None and len(sys.argv) == 1:
+        from ad_sentinel.gui import run_gui
+
+        run_gui()
+        return 0
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
     args = parse_args(argv)
 

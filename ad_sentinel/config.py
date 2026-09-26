@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 OWN_SITE_LABEL = "내가 관리하는 사이트 점검 (robots.txt 무시)"
 ROBOTS_IGNORE_WARNING = (
@@ -9,7 +9,8 @@ ROBOTS_IGNORE_WARNING = (
 
 @dataclass
 class CrawlConfig:
-    start_url: str
+    start_url: str = ""
+    url_list: list[str] = field(default_factory=list)
     max_pages: int = 30
     max_depth: int = 3
     include_subdomains: bool = True

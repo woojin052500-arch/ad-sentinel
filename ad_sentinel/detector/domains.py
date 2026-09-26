@@ -5,11 +5,9 @@ from ad_sentinel.detector.keywords import ADULT, GAMBLING
 from ad_sentinel.paths import app_dir
 
 DEFAULT_WHITELIST = (
-    "go.kr", "gov.kr", "or.kr", "re.kr", "ac.kr", "mil.kr",
-    "korea.kr", "korea.net",
+    "go.kr", "gov.kr", "mil.kr", "korea.kr", "korea.net",
     "youtube.com", "youtu.be", "facebook.com", "instagram.com", "twitter.com", "x.com",
     "blog.naver.com", "post.naver.com", "tv.naver.com", "pf.kakao.com",
-    "docs.google.com", "arirang.com", "dokdohistory.com", "redwhistle.org",
 )
 
 WHITELIST_FILE = "whitelist.txt"
@@ -54,3 +52,26 @@ def suspicious_domain(host: str) -> str | None:
         if token in SUSPICIOUS_TOKENS:
             return SUSPICIOUS_TOKENS[token]
     return None
+
+
+def user_whitelist_path() -> Path:
+    return app_dir() / WHITELIST_FILE
+
+
+def read_user_whitelist() -> list[str]:
+    path = user_whitelist_path()
+    if not path.is_file():
+        return []
+    return [l.strip() for l in path.read_text(encoding="utf-8").splitlines()
+            if l.strip() and not l.strip().startswith("#")]
+
+
+def save_user_whitelist(domains: list[str]) -> Path:
+    path = user_whitelist_path()
+    cleaned = []
+    for d in domains:
+        d = d.strip().lower().removeprefix("http://").removeprefix("https://").removeprefix("*.").strip("/")
+        if d and not d.startswith("#") and d not in cleaned:
+            cleaned.append(d)
+    path.write_text("\n".join(cleaned) + ("\n" if cleaned else ""), encoding="utf-8")
+    return path

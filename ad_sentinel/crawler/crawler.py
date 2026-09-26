@@ -44,15 +44,24 @@ class Crawler:
 
     def run(self) -> dict:
         cfg = self.config
-        start_url = normalize_url(cfg.start_url)
-        if not start_url:
-            raise ValueError(f"올바른 http/https 주소가 아닙니다: {cfg.start_url}")
+        if cfg.url_list:
+            seeds = list(dict.fromkeys(u for u in (normalize_url(x) for x in cfg.url_list) if u))
+            if not seeds:
+                raise ValueError("목록에 점검할 수 있는 http/https 주소가 없습니다.")
+            mode, start_url, self.total = "list", seeds[0], len(seeds)
+        else:
+            start_url = normalize_url(cfg.start_url)
+            if not start_url:
+                raise ValueError(f"올바른 http/https 주소가 아닙니다: {cfg.start_url}")
+            seeds, mode, self.total = [start_url], "site", cfg.max_pages
 
         result = {
             "meta": {
                 "tool": "AD Sentinel",
                 "version": __version__,
+                "mode": mode,
                 "start_url": start_url,
+                "seed_urls": seeds,
                 "started_at": _now(),
                 "finished_at": None,
                 "stopped_by_user": False,
@@ -66,8 +75,10 @@ class Crawler:
         if not cfg.respect_robots:
             log.warning("[경고] %s", ROBOTS_IGNORE_WARNING)
 
-        queue = deque([(start_url, 0, "")])
-        seen = {start_url}
+        found_on = "URL 목록" if mode == "list" else ""
+        queue = deque((u, 0, found_on) for u in seeds)
+        seen = set(seeds)
+        follow_links = mode == "site"
 
         setup_bundled_browser()
         with sync_playwright() as pw:
@@ -80,7 +91,7 @@ class Crawler:
                 bypass_csp=True,
             )
             try:
-                while queue and len(result["pages"]) < cfg.max_pages:
+                while queue and len(result["pages"]) < self.total:
                     if self.stop_event.is_set():
                         result["meta"]["stopped_by_user"] = True
                         break
@@ -98,7 +109,7 @@ class Crawler:
                     if page_result["final_url"]:
                         seen.add(page_result["final_url"])
 
-                    if depth < cfg.max_depth:
+                    if follow_links and depth < cfg.max_depth:
                         for link in links:
                             if link not in seen:
                                 seen.add(link)
@@ -116,9 +127,9 @@ class Crawler:
         return result
 
     def _report(self, done: int, url: str) -> None:
-        log.info("[%d/%d] %s", done, self.config.max_pages, url or "완료")
+        log.info("[%d/%d] %s", done, self.total, url or "완료")
         if self.on_progress:
-            self.on_progress(done, self.config.max_pages, url)
+            self.on_progress(done, self.total, url)
 
     def _crawl_page(self, context, url: str, depth: int) -> tuple[dict, list[str]]:
         cfg = self.config
@@ -165,9 +176,7 @@ class Crawler:
             log.info("  렌더링 대기·스크롤 %.2fs", page_result["timings"]["render"])
 
             page_result["final_url"] = normalize_url(page.url) or page.url
-            page_result["offsite_redirect"] = not is_same_site(
-                page.url, cfg.start_url, cfg.include_subdomains
-            )
+            page_result["offsite_redirect"] = not is_same_site(page.url, url, cfg.include_subdomains)
 
             t = time.monotonic()
             frames = page.frames

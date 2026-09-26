@@ -6,7 +6,7 @@ from ad_sentinel import __version__
 from ad_sentinel.crawler.url_utils import get_host, is_same_site
 from ad_sentinel.detector.domains import is_whitelisted, load_whitelist, suspicious_domain
 from ad_sentinel.detector.keywords import find_keywords, has_contact
-from ad_sentinel.detector.reflection import query_params, reflected_params
+from ad_sentinel.detector.reflection import is_search_param, query_params, reflected_params, strip_values
 
 HIGH = "high"
 SUSPECT = "suspect"
@@ -20,10 +20,27 @@ POINTS_CONTACT = 1
 POINTS_REFLECTION = 2
 
 REFLECTION = "param_reflection"
+SURFACE = "reflection_surface"
 REDIRECT = "redirect"
 HIDDEN = "hidden"
 VISIBLE = "visible"
-PATTERN_LABELS = {REFLECTION: "URL 파라미터 반사", REDIRECT: "자동 이동", HIDDEN: "숨김 광고", VISIBLE: "노출 광고"}
+PATTERN_LABELS = {
+    REFLECTION: "URL 파라미터 반사",
+    SURFACE: "악용 가능 지점",
+    REDIRECT: "자동 이동",
+    HIDDEN: "숨김 광고",
+    VISIBLE: "노출 광고",
+}
+ADVICE = {
+    REFLECTION: "주소 파라미터 값이 화면에 그대로 출력되어 광고 문구가 노출됩니다. "
+                "입력값을 그대로 출력하지 않도록 조치하고, 검색엔진에 노출된 해당 주소의 삭제를 요청하세요.",
+    SURFACE: "입력값을 그대로 출력하지 않도록 조치를 권장합니다. "
+             "현재 광고는 아니지만 같은 방식으로 광고 문구를 노출시키는 데 악용될 수 있습니다.",
+    REDIRECT: "다른 사이트로 자동 이동시키는 코드가 있습니다. 페이지 소스와 서버 파일의 변조 여부를 점검하세요.",
+    HIDDEN: "화면에 보이지 않게 숨겨진 광고입니다. 해당 요소를 삭제하고 게시판·편집기의 입력 필터와 계정 보안을 점검하세요.",
+    VISIBLE: "화면에 노출된 광고입니다. 게시글·댓글을 삭제하고 작성 경로(게시판, 댓글 등)의 스팸 차단 설정을 점검하세요.",
+}
+MAX_CHILD_LINKS = 20
 
 
 @dataclass
@@ -40,13 +57,18 @@ class Detector:
         self.config = config or DetectConfig()
         meta = crawl_result.get("meta", {})
         self.start_url = meta.get("start_url", "")
+        seeds = meta.get("seed_urls") or [self.start_url]
+        self.seed_count = len(seeds)
+        self.site_urls = list({get_host(u): u for u in reversed(seeds)}.values())
         self.include_subdomains = meta.get("config", {}).get("include_subdomains", True)
         self.whitelist = load_whitelist(self.config.extra_whitelist)
         self.external_hosts: Counter = Counter()
 
     def is_external(self, url: str) -> bool:
         host = get_host(url)
-        return bool(host) and url.startswith("http") and not is_same_site(url, self.start_url, self.include_subdomains)
+        if not host or not url.startswith("http"):
+            return False
+        return not any(is_same_site(url, site, self.include_subdomains) for site in self.site_urls)
 
     def is_trusted(self, url: str) -> bool:
         return not self.is_external(url) or is_whitelisted(get_host(url), self.whitelist)
@@ -71,6 +93,8 @@ class Detector:
                 "start_url": self.start_url,
                 "crawl_started_at": self.crawl.get("meta", {}).get("started_at"),
                 "page_count": len(self.crawl.get("pages", [])),
+                "mode": self.crawl.get("meta", {}).get("mode", "site"),
+                "seed_count": self.seed_count,
                 "config": vars(self.config).copy(),
             },
             "summary": {
@@ -101,11 +125,24 @@ class Detector:
             elements = elements + [{"type": "title", "selector": "title", "content": main["title"],
                                     "frame_path": [], "frame_url": main.get("frame_url", page["url"])}]
 
+        child_links: dict[tuple, list[str]] = defaultdict(list)
+        for e in elements:
+            if e["type"] == "link" and e.get("href"):
+                parts = e["selector"].split(" > ")
+                for i in range(1, len(parts)):
+                    key = (tuple(e.get("frame_path", [])), " > ".join(parts[:i]))
+                    if len(child_links[key]) < MAX_CHILD_LINKS:
+                        child_links[key].append(e["href"])
+
         results = []
         for rec in elements:
             for url in _urls_of(rec):
                 if self.is_external(url):
                     self.external_hosts[get_host(url)] += 1
+            if rec["type"] == "text":
+                inner = child_links.get((tuple(rec.get("frame_path", [])), rec["selector"]))
+                if inner:
+                    rec = {**rec, "links": inner}
             frame_path = tuple(rec.get("frame_path", []))
             in_hidden_frame = any(frame_path[:i] in hidden_frames for i in range(1, len(frame_path) + 1))
             params = page_params if not frame_path else _unique(page_params + query_params(rec.get("frame_url", "")))
@@ -164,14 +201,32 @@ class Detector:
             evidence.append(_ev("contact", "연락처·메신저 ID 포함", POINTS_CONTACT))
 
         reflected = reflected_params(params or [], text)
+        surface = False
         if reflected:
+            surface = self._is_surface_only(reflected, text, evidence)
             names = ", ".join(f"{p['name']}={p['value']}" for p in reflected)
             evidence.append(_ev("reflection", f"URL 파라미터 반사 ({names})", POINTS_REFLECTION))
 
         finding = self._finding(rec, evidence, categories or ["기타"], "")
         if finding:
             finding["reflected_params"] = reflected
+            if surface:
+                finding.update(level=SUSPECT, level_label=LEVEL_LABELS[SUSPECT], pattern=SURFACE,
+                               pattern_label=PATTERN_LABELS[SURFACE], advice=ADVICE[SURFACE])
         return finding
+
+    def _is_surface_only(self, reflected: list[dict], text: str, evidence: list[dict]) -> bool:
+        if not all(is_search_param(p["name"]) for p in reflected):
+            return False
+        if any(e["kind"] in ("domain", "hidden", "redirect") for e in evidence):
+            return False
+        values = [p["value"] for p in reflected]
+        outside = strip_values(text, values)
+        if find_keywords(outside) or has_contact(outside):
+            return False
+        payload_keywords = {kw.word for v in values for kw in find_keywords(v)}
+        payload_is_ad = len(payload_keywords) >= 2 or any(has_contact(v) for v in values)
+        return not payload_is_ad
 
     def _finding(self, rec: dict, evidence: list[dict], categories: list[str], page_url: str) -> dict | None:
         cfg = self.config
@@ -205,6 +260,7 @@ class Detector:
             "rect": rec.get("rect"),
             "evidence": evidence,
             "reflected_params": [],
+            "advice": ADVICE[pattern],
             "page_url": page_url,
         }
 

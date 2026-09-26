@@ -45,3 +45,22 @@ def reflected_params(params: list[tuple[str, str]], content: str) -> list[dict]:
             if hit not in hits:
                 hits.append(hit)
     return hits
+
+
+SEARCH_PARAM_NAMES = {"q", "s", "query", "keyword", "keywords", "kwd", "kw", "search", "term", "text", "word",
+                      "find", "stx", "sw", "searchword", "searchwrd", "searchkeyword", "searchtext", "searchtxt",
+                      "srchwrd", "schword", "schtext", "qt"}
+SEARCH_PARAM_PARTS = ("search", "srch", "keyword", "query", "sch")
+
+
+def is_search_param(name: str) -> bool:
+    name = name.lower()
+    return name in SEARCH_PARAM_NAMES or any(part in name for part in SEARCH_PARAM_PARTS)
+
+
+def strip_values(text: str, values: list[str]) -> str:
+    for value in values:
+        pattern = r"\s*".join(re.escape(c) for c in _compact(value))
+        if pattern:
+            text = re.sub(pattern, " ", text, flags=re.IGNORECASE)
+    return text
