@@ -5,6 +5,7 @@ import sys
 from ad_sentinel.config import CrawlConfig
 from ad_sentinel.crawler import Crawler
 from ad_sentinel.detector import DetectConfig, detect
+from ad_sentinel.paths import output_dir
 from ad_sentinel.storage import load_json, save_json
 from ad_sentinel.url_list import load_url_list
 
@@ -29,6 +30,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--ignore-robots", action="store_true",
                    help="내가 관리하는 사이트 점검: robots.txt 제한을 무시 (권한 있는 사이트에만 사용)")
     p.add_argument("--show-browser", action="store_true", help="브라우저 창을 띄워서 실행")
+    p.add_argument("--screenshots", action="store_true",
+                   help="진단용: 입장 버튼 클릭 직후와 대기 종료 시점 화면을 output/screenshots에 저장")
     p.add_argument("--browser", default="", help="브라우저 실행 파일 경로 (기본: 자동 탐색)")
     args = p.parse_args(argv)
     if not args.url and not args.from_json and not args.url_list:
@@ -54,6 +57,7 @@ def crawl(args) -> dict | None:
         respect_robots=not args.ignore_robots,
         headless=not args.show_browser,
         browser_executable=args.browser,
+        screenshot_dir=str(output_dir() / "screenshots") if args.screenshots else "",
     )
     try:
         result = Crawler(config).run()

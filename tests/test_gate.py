@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from ad_sentinel.config import CrawlConfig
+from ad_sentinel.config import BOT_BLOCK_NOTICE, CrawlConfig
 from ad_sentinel.crawler import Crawler
 from ad_sentinel.crawler.sitemap import parse_sitemap, sitemap_locations
 from ad_sentinel.crawler.url_utils import is_safe_to_visit
@@ -276,7 +276,10 @@ def test_loading_screen_after_gate_waits_for_feed(query, caplog):
     assert len(_feed_titles(first)) == 20
     assert "로딩 화면으로 보여 대기 중" in caplog.text
     assert "대기 시간" not in caplog.text and "다 불러와지지 않았을" not in caplog.text
-    assert "글 제목 20개를 수집했습니다" in caplog.text
+    assert "새로 나타난 글 제목 20개를 수집했습니다" in caplog.text
+    assert gate["post_titles"] == 20 and gate["titles_before"] >= 1
+    assert "왜 우리는 온라인에서" not in caplog.text.split("글 제목 20개")[1].split("\n")[0]
+    assert not any("봇 차단" in n for n in crawl["meta"]["notes"])
     contents = {f["content"] for f in detect(crawl)["findings"]}
     assert any("토토사이트 추천" in c for c in contents)
 
@@ -295,3 +298,23 @@ def test_long_plain_loading_screen_is_reported_incomplete(caplog):
     assert crawl["pages"][0]["gate"]["incomplete"] is True
     assert "다 불러와지지 않았을 수 있습니다" in caplog.text
     assert "더보기·추가 로딩 없음" not in caplog.text
+
+
+def test_bot_blocked_loading_screen_is_reported(caplog, tmp_path):
+    with caplog.at_level(logging.INFO, logger="ad_sentinel"):
+        crawl = Server("biglanding").crawl("?blocked=1", use_sitemap=False, max_pages=1, gate_wait_ms=6000,
+                                           load_more=False, screenshot_dir=str(tmp_path))
+    gate = crawl["pages"][0]["gate"]
+    assert gate["incomplete"] is True
+    assert gate["post_titles"] == 0 and gate["titles_before"] >= 1
+    assert "새로 나타난 글 제목이 없습니다" in caplog.text
+    assert "브라우저 보안" in gate["block_hints"]
+    assert any(n.startswith(BOT_BLOCK_NOTICE) for n in crawl["meta"]["notes"])
+    names = sorted(Path(p).name for p in gate["screenshots"])
+    assert [n.split("_", 2)[2] for n in names] == ["gate1_clicked.png", "gate1_waited.png"]
+    assert all((tmp_path / n).stat().st_size > 1000 for n in names)
+
+
+def test_screenshots_are_off_by_default(tmp_path):
+    crawl = Server("gate").crawl("index.html", max_pages=1)
+    assert crawl["pages"][0]["gate"]["screenshots"] == []

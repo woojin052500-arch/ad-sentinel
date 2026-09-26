@@ -71,6 +71,7 @@ class App(tk.Tk):
         self.delay_sec = tk.DoubleVar(value=CrawlConfig.delay_sec)
         self.page_timeout = tk.IntVar(value=int(CrawlConfig.page_total_timeout_sec))
         self.show_advanced = tk.BooleanVar(value=False)
+        self.show_browser = tk.BooleanVar(value=False)
         self.run_started = 0.0
         self.show_detail_log = tk.BooleanVar(value=False)
         self.list_info = tk.StringVar(value="불러온 목록 없음")
@@ -166,6 +167,8 @@ class App(tk.Tk):
                     width=5).pack(side="left", padx=pad)
         ttk.Label(self.advanced_frame, text="초").pack(side="left")
         ttk.Label(self.advanced_frame, foreground=HINT_COLOR, text="  (차단되면 간격을 자동으로 늘림)").pack(side="left")
+        ttk.Checkbutton(self.advanced_frame, text="브라우저 창 보이기(진단용)",
+                        variable=self.show_browser).pack(side="left", padx=(pad * 3, 0))
 
         buttons = ttk.Frame(root)
         buttons.pack(fill="x", pady=pad)
@@ -299,7 +302,9 @@ class App(tk.Tk):
             messagebox.showwarning("입력 오류", "요청 간격과 페이지당 제한 시간은 숫자로 입력하세요.")
             return None
         common = dict(respect_robots=not self.own_site.get(), delay_sec=max(0.0, delay),
-                      page_total_timeout_sec=max(10.0, timeout), enter_gate=self.enter_gate.get())
+                      page_total_timeout_sec=max(10.0, timeout), enter_gate=self.enter_gate.get(),
+                      headless=not self.show_browser.get(),
+                      screenshot_dir=str(output_dir() / "screenshots") if self.show_detail_log.get() else "")
         if self.mode.get() == LIST:
             if not self.url_list:
                 messagebox.showwarning("목록 없음", "먼저 [목록 파일 불러오기]로 점검할 주소 목록을 불러오세요.")

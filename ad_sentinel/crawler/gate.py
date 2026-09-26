@@ -200,6 +200,18 @@ JS_CLICK = r"""
 }
 """
 
+BOT_BLOCK_HINT = re.compile(
+    r"브라우저\s*보안|VPN\s*(사용\s*)?(제한|차단|금지)|봇\s*(차단|탐지|감지|방지)|자동화\s*(프로그램|도구|브라우저)|"
+    r"(비정상|자동)\s*(적인\s*)?(접근|접속|트래픽)|캡[차챠]|로봇이\s*아닙니다|사람인지\s*확인|"
+    r"captcha|checking\s+your\s+browser|verify\s+(that\s+)?you\s+are\s+(a\s+)?human|are\s+you\s+a\s+robot|"
+    r"bot\s+(detection|protection)|unusual\s+traffic",
+    re.IGNORECASE,
+)
+
+SCREEN_TEXT_JS = r"""
+() => (document.body ? document.body.innerText || '' : '').slice(0, 3000)
+"""
+
 BOILERPLATE_LINK = re.compile(
     r"개인\s*정보|처리\s*방침|이용\s*약관|약관|서비스\s*(안내|소개)|이용\s*안내|저작권|이메일\s*(무단)?\s*수집|"
     r"청소년\s*보호|사이트\s*맵|오시는\s*길|찾아\s*오시는|제휴|광고\s*문의|고객\s*센터|회사\s*소개|통계|책임\s*한계|"

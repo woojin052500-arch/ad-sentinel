@@ -5,18 +5,20 @@ import time
 from collections import deque
 from datetime import datetime
 from typing import Callable
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from playwright.sync_api import Error as PlaywrightError, Frame, Page, sync_playwright
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from ad_sentinel import __version__
-from ad_sentinel.config import ROBOTS_IGNORE_WARNING, CrawlConfig
+from ad_sentinel.config import BOT_BLOCK_NOTICE, ROBOTS_IGNORE_WARNING, CrawlConfig
 from ad_sentinel.crawler.browser import launch_browser
 from ad_sentinel.crawler import sitemap
 from ad_sentinel.crawler.extract_js import EXTRACT_JS, FRAME_ELEMENT_JS
-from ad_sentinel.crawler.gate import (DANGER_WORDS, EXIT_PATTERN, FIND_GATE_JS, FIND_MORE_JS, FOOTER_SELECTOR, GATE_PARTS,
-                                      GATE_WORDS, JS_CLICK, MAX_GATE_CANDIDATES, PAGE_METRICS_JS, STRONG_GATE_WORDS,
+from ad_sentinel.crawler.gate import (BOT_BLOCK_HINT, DANGER_WORDS, EXIT_PATTERN, FIND_GATE_JS, FIND_MORE_JS, FOOTER_SELECTOR, GATE_PARTS,
+                                      GATE_WORDS, JS_CLICK, MAX_GATE_CANDIDATES, PAGE_METRICS_JS, SCREEN_TEXT_JS,
+                                      STRONG_GATE_WORDS,
                                       content_changed, content_grew, is_boilerplate_link)
 from ad_sentinel.crawler.robots import RobotsChecker
 from ad_sentinel.crawler.url_utils import is_crawlable, is_safe_to_visit, is_same_site, normalize_url
@@ -63,6 +65,7 @@ class Crawler:
         self.gate_key = ""
         self.content_linked: set[str] = set()
         self.listed_titles: dict[str, str] = {}
+        self.run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.delay = config.delay_sec
         self.sitemap_urls = list(config.sitemap_urls)
         self.gate_rejections = 0
@@ -473,7 +476,9 @@ class Crawler:
             return
 
         before_url = page.url
-        for gate in candidates if first else candidates[:1]:
+        titles_before = self._titles(page_result)
+        shots: list[str] = []
+        for n, gate in enumerate(candidates if first else candidates[:1], 1):
             if remaining_ms() < 3000:
                 return
             before = self._metrics(page, remaining_ms())
@@ -484,7 +489,11 @@ class Crawler:
             if not self._click(page, f"[data-ad-sentinel-gate='{gate['index']}']", remaining_ms()):
                 log.info("  '%s' 클릭 실패", gate["text"])
                 continue
+            if first:
+                self._screenshot(page, f"gate{n}_clicked", shots)
             after = self._wait_for_change(page, before, min(cfg.gate_wait_ms, max(0, remaining_ms() - 2000)))
+            if first:
+                self._screenshot(page, f"gate{n}_waited", shots)
             if after:
                 unsettled = bool(after.get("unsettled"))
                 break
@@ -526,6 +535,7 @@ class Crawler:
             "text_before": before["text"], "text_after": after["text"],
             "load_more_clicks": 0,
             "incomplete": unsettled or bool(after.get("loading")),
+            "screenshots": shots,
         }
         page_result["gate_attempt"] = None
         if first:
@@ -533,7 +543,9 @@ class Crawler:
                         gate["text"], before["text"], after["text"], len(new_links))
             if page_result["gate"]["incomplete"]:
                 notice.warning("입장 후 화면이 다 불러와지지 않았을 수 있습니다(화면 글자 %d자 → %d자). "
-                               "고급 설정에서 페이지당 제한 시간을 늘려 다시 점검해 보세요.", before["text"], after["text"])
+                               "고급 설정에서 페이지당 제한 시간을 늘리거나 '브라우저 창 보이기'로 화면을 비교해 보세요.",
+                               before["text"], after["text"])
+                page_result["gate"]["block_hints"] = self._block_hints(page, page_result, remaining_ms)
         else:
             log.info("  입장 버튼 다시 클릭 후 점검 계속")
         self.gate_key = gate["key"]
@@ -541,11 +553,42 @@ class Crawler:
         if cfg.load_more and not page_result["offsite_redirect"]:
             self._load_more(page, page_result, remaining_ms, full=first)
         if first:
-            titles = list(dict.fromkeys(e["context_title"] for e in page_result["elements"]
-                                        if e.get("context_title") and not e.get("frame_path")))
+            titles = [t for t in self._titles(page_result) if t not in titles_before]
             page_result["gate"]["post_titles"] = len(titles)
-            notice.info("입장 후 화면에서 글 제목 %d개를 수집했습니다.%s", len(titles),
-                        f" (예: {', '.join(t[:20] for t in titles[:3])})" if titles else "")
+            page_result["gate"]["titles_before"] = len(titles_before)
+            if titles:
+                notice.info("입장 후 새로 나타난 글 제목 %d개를 수집했습니다. (예: %s, 입장 전 화면 제목 %d개는 제외)",
+                            len(titles), ", ".join(t[:20] for t in titles[:3]), len(titles_before))
+            else:
+                notice.warning("입장 후 새로 나타난 글 제목이 없습니다. (입장 전 화면 제목 %d개는 제외) "
+                               "피드 게시글을 수집하지 못했을 수 있습니다.", len(titles_before))
+
+    @staticmethod
+    def _titles(page_result: dict) -> list[str]:
+        return list(dict.fromkeys(e["context_title"] for e in page_result["elements"]
+                                  if e.get("context_title") and not e.get("frame_path")))
+
+    def _screenshot(self, page: Page, label: str, shots: list[str]) -> None:
+        if not self.config.screenshot_dir:
+            return
+        folder = Path(self.config.screenshot_dir)
+        path = folder / f"{self.run_stamp}_{label}.png"
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            page.screenshot(path=str(path), timeout=5000)
+        except (PlaywrightError, OSError) as e:
+            log.info("  화면 캡처 실패(%s): %s", label, str(e).strip().splitlines()[0] if str(e).strip() else e)
+            return
+        shots.append(str(path))
+        log.info("  화면 캡처 저장: %s", path)
+
+    def _block_hints(self, page: Page, page_result: dict, remaining_ms: Callable[[], int]) -> list[str]:
+        try:
+            screen = self._evaluate(page.main_frame, SCREEN_TEXT_JS, None, max(1, min(3000, remaining_ms()))) or ""
+        except PlaywrightError:
+            screen = ""
+        texts = [screen] + [e.get("content") or "" for e in page_result["elements"] if not e.get("frame_path")]
+        return _hints(texts)
 
     def _reextract(self, page: Page, page_result: dict, remaining_ms: Callable[[], int]) -> None:
         old_elements, old_frames = page_result["elements"], page_result["frames"]
@@ -671,6 +714,15 @@ class Crawler:
 
     def _notes(self, mode: str, result: dict) -> list[str]:
         notes = []
+        gate = result["meta"].get("gate")
+        if gate and gate.get("incomplete"):
+            hints = list(gate.get("block_hints") or [])
+            for p in result["pages"]:
+                hints += _hints([p.get("title") or "", p.get("listed_title") or ""])
+            hints = list(dict.fromkeys(hints))
+            if hints:
+                gate["block_hints"] = hints
+                notes.append(f"{BOT_BLOCK_NOTICE} (입장 후 로딩 화면에서 멈춤, 보안 안내 문구: {', '.join(hints[:3])})")
         if result["meta"].get("start_error"):
             notes.append(f"시작 주소가 오류 페이지입니다({result['meta']['start_error']}). 입장 버튼은 누르지 않았습니다. "
                          "주소가 맞는지 브라우저로 확인해 보세요.")
@@ -854,6 +906,16 @@ def _dedupe_records(records: list[dict]) -> list[dict]:
             seen.add(key)
             result.append(rec)
     return result
+
+
+def _hints(texts: list[str]) -> list[str]:
+    found = []
+    for text in texts:
+        for m in BOT_BLOCK_HINT.finditer(text):
+            word = " ".join(m.group(0).split())
+            if word not in found:
+                found.append(word)
+    return found
 
 
 def _shrunk(before: dict, after: dict) -> bool:

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 tk = pytest.importorskip("tkinter")
@@ -50,7 +52,6 @@ def test_results_table_and_detail(app):
 
 def test_zero_findings_shows_summary_and_unchecked(app):
     import json
-    from pathlib import Path
 
     crawl = json.loads((Path(__file__).parent / "fixtures" / "mois_sample.json").read_text(encoding="utf-8"))
     app._show_report(crawl, detect(crawl))
@@ -106,6 +107,14 @@ def test_gate_option_and_notices(app):
     assert app._make_config().enter_gate is True
     app.enter_gate.set(False)
     assert app._make_config().enter_gate is False
+    config = app._make_config()
+    assert config.headless is True and config.screenshot_dir == ""
+    app.show_browser.set(True)
+    app.show_detail_log.set(True)
+    config = app._make_config()
+    assert config.headless is False and Path(config.screenshot_dir).name == "screenshots"
+    app.show_browser.set(False)
+    app.show_detail_log.set(False)
 
     app._handle_event(("notice", "입장 버튼('입장하기') 클릭 후 점검 계속 (링크 0개 → 3개)"))
     assert "입장 버튼('입장하기') 클릭 후 점검 계속" in app.log.get("1.0", "end")
