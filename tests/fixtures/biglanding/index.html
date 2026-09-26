@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="utf-8"><title>익명 토론 커뮤니티</title>
+<style>
+  body { margin: 0; font-family: sans-serif; }
+  .hero { height: 90vh; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .cta { font-size: 22px; padding: 20px 48px; border: 1px solid #555; }
+  #splash { position: fixed; inset: 0; background: #111; color: #fff; display: none; flex-direction: column;
+             align-items: center; justify-content: center; z-index: 50; }
+  .bar { width: 300px; height: 4px; background: #333; }
+  .bar div { height: 4px; background: #fff; width: 10%; }
+  .post { border-bottom: 1px solid #ddd; padding: 16px 0; min-height: 260px; }
+</style></head>
+<body>
+  <div id="landing">
+    <div class="hero"><h1>회원가입 없이, 바로 익명.</h1>
+      <a class="cta" href="javascript:startSite()">지금, 익명으로 시작하기 &gt;</a></div>
+    <section id="about"></section>
+  </div>
+  <div id="splash"><div class="logo">익명토론</div><div class="slogan">정상 뒤집어서 상정</div>
+    <div class="bar"><div id="bar-fill"></div></div><div id="splash-text"></div>
+    <div class="credit">from developer example.dev</div></div>
+  <div id="app"></div>
+  <script>
+    function clickLog(name) { fetch('/clicked/' + name); }
+    var about = '';
+    for (var i = 1; i <= 40; i++) {
+      about += '<p>익명 토론 커뮤니티 소개 ' + i + ': 누구나 자유롭게 생각을 나누고 서로 존중하며 토론하는 공간입니다. ' +
+               '가이드라인을 지켜 주세요. 자주 묻는 질문과 운영 원칙을 확인하세요.</p>';
+    }
+    document.getElementById('about').innerHTML = about;
+    var plain = location.search.indexOf('plain=1') >= 0;
+    if (plain) document.querySelector('.bar').remove();
+
+    var posts = [];
+    for (var n = 1; n <= 20; n++) {
+      var body = n === 4 ? '토토사이트 추천 가입코드 777 텔레그램 @toto777' : '오늘 있었던 일을 적어 봅니다. 글 번호 ' + n;
+      posts.push('<div class="post"><h3 class="title">피드 글 ' + n + '</h3><p>' + body + '</p></div>');
+    }
+    var shown = 0;
+    function append() {
+      document.getElementById('feed').insertAdjacentHTML('beforeend', posts.slice(shown, shown + 5).join(''));
+      shown += 5;
+    }
+    function startSite() {
+      clickLog('start');
+      document.getElementById('landing').style.display = 'none';
+      var splash = document.getElementById('splash');
+      splash.style.display = 'flex';
+      var pct = 10;
+      var timer = setInterval(function () {
+        pct += 8;
+        var fill = document.getElementById('bar-fill');
+        if (fill) fill.style.width = pct + '%';
+      }, 300);
+      setTimeout(function () {
+        clearInterval(timer);
+        splash.style.display = 'none';
+        document.getElementById('app').innerHTML = '<h2>최신 글</h2><div id="feed"></div>';
+        append();
+        window.addEventListener('scroll', function () {
+          if (shown < posts.length && window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 200) {
+            setTimeout(append, 300);
+          }
+        });
+      }, location.search.indexOf('slow=1') >= 0 ? 8000 : 3500);
+    }
+  </script>
+</body>
+</html>

@@ -31,6 +31,7 @@ ERROR_PAGE_TEXT = re.compile(
     r"잘못된\s*(주소|경로|접근)|not\s*found|page\s*not|does\s*not\s*exist", re.IGNORECASE)
 FEED_PATH = re.compile(r"\.(xml|rss|atom)(\.gz)?$|/(rss|feed|atom)/?$", re.IGNORECASE)
 REPEAT_WARN = 3
+SHRINK_SETTLE_SEC = 5
 RATE_LIMIT_TEXT = re.compile(
     r"요청\s*(속도|횟수)?\s*제한|too\s*many\s*requests|rate\s*limit|과도한\s*(요청|접속)|"
     r"잠시\s*후\s*다시\s*(시도|접속)|접속이\s*(차단|제한)", re.IGNORECASE)
@@ -396,15 +397,28 @@ class Crawler:
     def _wait_for_change(self, page: Page, before: dict, limit_ms: int, test=content_changed) -> dict | None:
         end = time.monotonic() + limit_ms / 1000
         last, stable, saw_loading = None, 0, False
+        floor, still_hash, still_since = None, None, 0.0
         while time.monotonic() < end:
             page.wait_for_timeout(300)
             now = self._metrics(page, int((end - time.monotonic()) * 1000))
             if not now:
                 continue
-            if now.get("loading"):
+            shrunk = False
+            if test is content_changed and _shrunk(before, now):
+                floor = now["text"] if floor is None else min(floor, now["text"])
+                if now["hash"] != still_hash:
+                    still_hash, still_since = now["hash"], time.monotonic()
+                grown = now["text"] >= max(floor * 2, floor + 60)
+                shrunk = not grown and time.monotonic() - still_since < SHRINK_SETTLE_SEC
+                if not grown and not shrunk:
+                    now["unsettled"] = True
+            if now.get("loading") or shrunk:
                 if not saw_loading:
-                    log.info("  로딩 화면 대기 중...")
+                    reason = "로딩 표시" if now.get("loading") else f"화면 글자 {before['text']}자 → {now['text']}자로 급감"
+                    log.info("  로딩 화면으로 보여 대기 중... (%s)", reason)
                 saw_loading, stable = True, 0
+                now["unsettled"] = True
+                last = now
             elif test(before, now):
                 if last and abs(now["text"] - last["text"]) < 20 and abs(now["nodes"] - last["nodes"]) < 5:
                     stable += 1
@@ -413,7 +427,9 @@ class Crawler:
                 else:
                     stable = 0
             last = now
-        if last and not last.get("loading") and test(before, last):
+        if last and test(before, last) and (not last.get("loading") or saw_loading):
+            if last.get("unsettled"):
+                log.warning("  대기 시간(%.0f초) 안에 로딩이 끝나지 않음", limit_ms / 1000)
             return last
         return None
 
@@ -470,6 +486,7 @@ class Crawler:
                 continue
             after = self._wait_for_change(page, before, min(cfg.gate_wait_ms, max(0, remaining_ms() - 2000)))
             if after:
+                unsettled = bool(after.get("unsettled"))
                 break
             log.info("  '%s'을 눌렀지만 화면 변화가 없음", gate["text"])
             page_result["gate_attempt"] = {"text": gate["text"], "changed": False}
@@ -494,6 +511,7 @@ class Crawler:
             pass
         self._wait_for_render(page, remaining_ms)
         self._reextract(page, page_result, remaining_ms)
+        after = self._metrics(page, remaining_ms()) or after
 
         after_url = normalize_url(page.url) or page.url
         page_result["final_url"] = after_url
@@ -507,17 +525,27 @@ class Crawler:
             "new_links": len(new_links),
             "text_before": before["text"], "text_after": after["text"],
             "load_more_clicks": 0,
+            "incomplete": unsettled or bool(after.get("loading")),
         }
         page_result["gate_attempt"] = None
         if first:
             notice.info("입장 버튼('%s') 클릭 후 점검 계속 (화면 글자 %d자 → %d자, 새 링크 %d개)",
                         gate["text"], before["text"], after["text"], len(new_links))
+            if page_result["gate"]["incomplete"]:
+                notice.warning("입장 후 화면이 다 불러와지지 않았을 수 있습니다(화면 글자 %d자 → %d자). "
+                               "고급 설정에서 페이지당 제한 시간을 늘려 다시 점검해 보세요.", before["text"], after["text"])
         else:
             log.info("  입장 버튼 다시 클릭 후 점검 계속")
         self.gate_key = gate["key"]
 
         if cfg.load_more and not page_result["offsite_redirect"]:
             self._load_more(page, page_result, remaining_ms, full=first)
+        if first:
+            titles = list(dict.fromkeys(e["context_title"] for e in page_result["elements"]
+                                        if e.get("context_title") and not e.get("frame_path")))
+            page_result["gate"]["post_titles"] = len(titles)
+            notice.info("입장 후 화면에서 글 제목 %d개를 수집했습니다.%s", len(titles),
+                        f" (예: {', '.join(t[:20] for t in titles[:3])})" if titles else "")
 
     def _reextract(self, page: Page, page_result: dict, remaining_ms: Callable[[], int]) -> None:
         old_elements, old_frames = page_result["elements"], page_result["frames"]
@@ -583,6 +611,8 @@ class Crawler:
 
         if reveal:
             log.info("  이미지 보기·펼치기용 '더보기' %d개는 누르지 않음 (게시글 추가 로딩 버튼이 아님)", reveal)
+        if not clicks and not scrolls and full:
+            notice.info("더보기·추가 로딩 없음 (게시글 더보기 버튼이 없고, 맨 아래로 스크롤해도 새 글이 나오지 않음)")
         if clicks or scrolls:
             last = self._metrics(page, remaining_ms()) or first_metrics
             self._reextract(page, page_result, remaining_ms)
@@ -824,3 +854,7 @@ def _dedupe_records(records: list[dict]) -> list[dict]:
             seen.add(key)
             result.append(rec)
     return result
+
+
+def _shrunk(before: dict, after: dict) -> bool:
+    return after["text"] < 300 and after["text"] < before["text"] * 0.3

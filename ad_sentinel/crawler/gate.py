@@ -168,8 +168,18 @@ PAGE_METRICS_JS = r"""
     const text = document.body ? (document.body.innerText || '').replace(/\s+/g, '') : '';
     let hash = 0;
     for (let i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) | 0;
+    let busy = false;
+    if (text.length < 400) {
+        for (const el of document.querySelectorAll('progress, [role=progressbar], [aria-busy=true], ' +
+                '[class*=loading i], [class*=loader i], [class*=spinner i], [class*=progress i], [class*=bar i], ' +
+                '[id*=loading i], [id*=loader i], [id*=progress i]')) {
+            const st = getComputedStyle(el);
+            const r = el.getBoundingClientRect();
+            if (st.display !== 'none' && st.visibility !== 'hidden' && r.width > 0 && r.height > 0) { busy = true; break; }
+        }
+    }
     const loading = text.length < 400 &&
-        /로딩|로드중|다운로드중|불러오는중|준비중|잠시만|loading|pleasewait/i.test(text);
+        (busy || /로딩|로드중|다운로드중|불러오는중|준비중|잠시만|loading|pleasewait/i.test(text));
     return {
         loading,
         text: text.length,

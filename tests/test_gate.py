@@ -1,4 +1,5 @@
 import functools
+import logging
 import http.server
 import os
 import threading
@@ -258,3 +259,39 @@ def test_anchor_links_are_not_content_links():
 
     assert is_boilerplate_link({"content": "About", "raw_href": "#about"})
     assert not is_boilerplate_link({"content": "자유게시판", "raw_href": "/board"})
+
+
+def _feed_titles(page):
+    return [e["content"] for e in page["elements"] if e["type"] == "text" and e["content"].startswith("피드 글")]
+
+
+@pytest.mark.parametrize("query", ["", "?plain=1"])
+def test_loading_screen_after_gate_waits_for_feed(query, caplog):
+    with caplog.at_level(logging.INFO, logger="ad_sentinel"):
+        crawl = Server("biglanding").crawl(query, use_sitemap=False, max_pages=1, gate_wait_ms=20000)
+    first = crawl["pages"][0]
+    gate = first["gate"]
+    assert gate["text_before"] > 2000 and gate["text_after"] > 150
+    assert gate["incomplete"] is False
+    assert len(_feed_titles(first)) == 20
+    assert "로딩 화면으로 보여 대기 중" in caplog.text
+    assert "대기 시간" not in caplog.text and "다 불러와지지 않았을" not in caplog.text
+    assert "글 제목 20개를 수집했습니다" in caplog.text
+    contents = {f["content"] for f in detect(crawl)["findings"]}
+    assert any("토토사이트 추천" in c for c in contents)
+
+
+def test_long_loading_screen_with_progress_bar_is_waited_out():
+    crawl = Server("biglanding").crawl("?slow=1", use_sitemap=False, max_pages=1, gate_wait_ms=20000)
+    first = crawl["pages"][0]
+    assert first["gate"]["incomplete"] is False
+    assert len(_feed_titles(first)) == 20
+
+
+def test_long_plain_loading_screen_is_reported_incomplete(caplog):
+    with caplog.at_level(logging.INFO, logger="ad_sentinel"):
+        crawl = Server("biglanding").crawl("?slow=1&plain=1", use_sitemap=False, max_pages=1, gate_wait_ms=20000,
+                                           load_more=False)
+    assert crawl["pages"][0]["gate"]["incomplete"] is True
+    assert "다 불러와지지 않았을 수 있습니다" in caplog.text
+    assert "더보기·추가 로딩 없음" not in caplog.text
