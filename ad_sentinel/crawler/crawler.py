@@ -13,8 +13,9 @@ from ad_sentinel.config import ROBOTS_IGNORE_WARNING, CrawlConfig
 from ad_sentinel.crawler.browser import launch_browser
 from ad_sentinel.crawler import sitemap
 from ad_sentinel.crawler.extract_js import EXTRACT_JS, FRAME_ELEMENT_JS
-from ad_sentinel.crawler.gate import (DANGER_WORDS, FIND_GATE_JS, FOOTER_SELECTOR, GATE_WORDS, STRONG_GATE_WORDS,
-                                      is_boilerplate_link)
+from ad_sentinel.crawler.gate import (DANGER_WORDS, FIND_GATE_JS, FIND_MORE_JS, FOOTER_SELECTOR, GATE_PARTS,
+                                      GATE_WORDS, JS_CLICK, MAX_GATE_CANDIDATES, PAGE_METRICS_JS, STRONG_GATE_WORDS,
+                                      content_changed, is_boilerplate_link)
 from ad_sentinel.crawler.robots import RobotsChecker
 from ad_sentinel.crawler.url_utils import is_crawlable, is_safe_to_visit, is_same_site, normalize_url
 from ad_sentinel.paths import setup_bundled_browser
@@ -171,10 +172,10 @@ class Crawler:
             "elements": [],
         }
         started = time.monotonic()
-        deadline = started + cfg.page_total_timeout_sec
+        self._deadline = started + cfg.page_total_timeout_sec
 
         def remaining_ms() -> int:
-            return max(0, int((deadline - time.monotonic()) * 1000))
+            return max(0, int((self._deadline - time.monotonic()) * 1000))
 
         page = context.new_page()
         page.on("popup", lambda p: p.close())
@@ -255,6 +256,41 @@ class Crawler:
         records = [r for r in page_result["elements"] if r["type"] == "link" and not is_boilerplate_link(r)]
         return set(self._next_links({**page_result, "elements": records}))
 
+    def _metrics(self, page: Page, timeout_ms: int) -> dict | None:
+        try:
+            return self._evaluate(page.main_frame, PAGE_METRICS_JS, None, max(1, min(3000, timeout_ms)))
+        except PlaywrightError:
+            return None
+
+    def _wait_for_change(self, page: Page, before: dict, limit_ms: int) -> dict | None:
+        end = time.monotonic() + limit_ms / 1000
+        last, stable = None, 0
+        while time.monotonic() < end:
+            page.wait_for_timeout(300)
+            now = self._metrics(page, int((end - time.monotonic()) * 1000))
+            if not now:
+                continue
+            if content_changed(before, now):
+                if last and abs(now["text"] - last["text"]) < 20 and abs(now["nodes"] - last["nodes"]) < 5:
+                    stable += 1
+                    if stable >= 2:
+                        return now
+                else:
+                    stable = 0
+            last = now
+        return last if last and content_changed(before, last) else None
+
+    def _click(self, page: Page, selector: str, timeout_ms: int) -> bool:
+        try:
+            page.locator(selector).first.click(timeout=max(1, min(3000, timeout_ms)))
+            return True
+        except PlaywrightError:
+            pass
+        try:
+            return bool(self._evaluate(page.main_frame, JS_CLICK, selector, max(1, min(3000, timeout_ms))))
+        except PlaywrightError:
+            return False
+
     def _try_gate(self, page: Page, page_result: dict, url: str, remaining_ms: Callable[[], int]) -> None:
         cfg = self.config
         first = not self.gate_key
@@ -263,39 +299,76 @@ class Crawler:
         content_before = self._content_links(page_result) - own
         if not first and len(content_before) >= cfg.gate_link_threshold:
             return
-        options = {"gateWords": GATE_WORDS, "strongWords": STRONG_GATE_WORDS, "dangerWords": DANGER_WORDS,
-                   "footerSelector": FOOTER_SELECTOR, "prefer": self.gate_key}
+        options = {"gateWords": GATE_WORDS, "gateParts": GATE_PARTS, "strongWords": STRONG_GATE_WORDS,
+                   "dangerWords": DANGER_WORDS, "footerSelector": FOOTER_SELECTOR, "prefer": self.gate_key,
+                   "maxCandidates": MAX_GATE_CANDIDATES}
         try:
-            gate = self._evaluate(page.main_frame, FIND_GATE_JS, options, min(5000, remaining_ms()))
+            candidates = self._evaluate(page.main_frame, FIND_GATE_JS, options, min(5000, remaining_ms()))
         except PlaywrightError as e:
             log.warning("  입장 버튼 찾기 실패: %s", str(e).strip().splitlines()[0])
             return
-        if not gate:
-            if first and len(content_before) < cfg.gate_link_threshold:
-                log.info("  본문 링크가 %d개뿐이지만 입장 버튼을 찾지 못함", len(content_before))
+        if first and len(content_before) >= cfg.gate_link_threshold:
+            skipped = [c["text"] for c in candidates or [] if c["weak"]]
+            candidates = [c for c in candidates or [] if not c["weak"]]
+            if skipped:
+                log.info("  본문 링크가 %d개라 흔한 문구 버튼은 누르지 않음: %s", len(content_before), ", ".join(skipped))
+        if not candidates:
+            if first:
+                log.info("  입장 버튼 후보 없음 (본문 링크 %d개)", len(content_before))
             return
 
-        few_links = len(content_before) < cfg.gate_link_threshold
-        big_button = (gate["viewport_ratio"] >= 0.004 and gate["first_screen"] and gate["content_chars"] < 800)
-        if first and not (few_links or big_button or gate["strong"]):
-            log.info("  '%s' 버튼이 있지만 관문 페이지로 보이지 않아 누르지 않음 (본문 링크 %d개, 본문 %d자)",
-                     gate["text"], len(content_before), gate["content_chars"])
+        before_url = page.url
+        for gate in candidates if first else candidates[:1]:
+            if remaining_ms() < 3000:
+                return
+            before = self._metrics(page, remaining_ms())
+            if not before:
+                return
+            log.info("  본문 링크 %d개(전체 %d개) → 입장 버튼 후보 '%s' 클릭",
+                     len(content_before), len(links_before), gate["text"])
+            if not self._click(page, f"[data-ad-sentinel-gate='{gate['index']}']", remaining_ms()):
+                log.info("  '%s' 클릭 실패", gate["text"])
+                continue
+            after = self._wait_for_change(page, before, min(cfg.gate_wait_ms, max(0, remaining_ms() - 2000)))
+            if after:
+                break
+            log.info("  '%s'을 눌렀지만 화면 변화가 없음", gate["text"])
+            page_result["gate_attempt"] = {"text": gate["text"], "changed": False}
+        else:
             return
 
-        before = page.url
-        log.info("  본문 링크 %d개(전체 %d개), 본문 %d자 → 입장 버튼 '%s' 클릭",
-                 len(content_before), len(links_before), gate["content_chars"], gate["text"])
         try:
-            page.locator("[data-ad-sentinel-gate='1']").first.click(timeout=max(1, min(5000, remaining_ms())))
-        except PlaywrightError as e:
-            log.warning("  입장 버튼 클릭 실패: %s", str(e).strip().splitlines()[0])
-            return
-        try:
-            page.wait_for_load_state("domcontentloaded", timeout=max(1, min(10000, remaining_ms())))
+            page.wait_for_load_state("domcontentloaded", timeout=max(1, min(5000, remaining_ms())))
         except PlaywrightError:
             pass
         self._wait_for_render(page, remaining_ms)
+        self._reextract(page, page_result, remaining_ms)
 
+        after_url = normalize_url(page.url) or page.url
+        page_result["final_url"] = after_url
+        page_result["offsite_redirect"] = not is_same_site(page.url, url, cfg.include_subdomains)
+        new_links = set(self._next_links(page_result)) - links_before - own - {after_url}
+        page_result["gate"] = {
+            "text": gate["text"], "url_before": before_url, "url_after": after_url,
+            "url_changed": after_url != (normalize_url(before_url) or before_url),
+            "links_before": len(content_before),
+            "links_after": len(self._content_links(page_result) - own - {after_url}),
+            "new_links": len(new_links),
+            "text_before": before["text"], "text_after": after["text"],
+            "load_more_clicks": 0,
+        }
+        page_result["gate_attempt"] = None
+        if first:
+            notice.info("입장 버튼('%s') 클릭 후 점검 계속 (화면 글자 %d자 → %d자, 새 링크 %d개)",
+                        gate["text"], before["text"], after["text"], len(new_links))
+        else:
+            log.info("  입장 버튼 다시 클릭 후 점검 계속")
+        self.gate_key = gate["key"]
+
+        if cfg.load_more and not page_result["offsite_redirect"]:
+            self._load_more(page, page_result, remaining_ms)
+
+    def _reextract(self, page: Page, page_result: dict, remaining_ms: Callable[[], int]) -> None:
         old_elements, old_frames = page_result["elements"], page_result["frames"]
         page_result["elements"], page_result["frames"] = [], []
         self._extract_all(page, page_result, remaining_ms)
@@ -303,27 +376,66 @@ class Crawler:
         keys = {(f["frame_url"], tuple(f["frame_path"])) for f in page_result["frames"]}
         page_result["frames"] += [f for f in old_frames if (f["frame_url"], tuple(f["frame_path"])) not in keys]
 
-        after = normalize_url(page.url) or page.url
-        page_result["final_url"] = after
-        page_result["offsite_redirect"] = not is_same_site(page.url, url, cfg.include_subdomains)
-        new_links = set(self._next_links(page_result)) - links_before - own - {after}
-        info = {
-            "text": gate["text"], "url_before": before, "url_after": after,
-            "url_changed": after != (normalize_url(before) or before),
-            "links_before": len(content_before),
-            "links_after": len(self._content_links(page_result) - own - {after}),
-            "new_links": len(new_links),
-        }
-        if not new_links and not info["url_changed"]:
-            page_result["gate_attempt"] = info
-            log.info("  입장 버튼 '%s'을 눌렀지만 새로 생긴 링크가 없음", gate["text"])
+    def _load_more(self, page: Page, page_result: dict, remaining_ms: Callable[[], int]) -> None:
+        cfg = self.config
+        self._deadline = max(self._deadline, time.monotonic() + cfg.load_more_timeout_sec + 15)
+        stop_at = time.monotonic() + cfg.load_more_timeout_sec
+        start_url = page.url
+        options = {"dangerWords": DANGER_WORDS}
+        clicks, scrolls = 0, 0
+        first_metrics = self._metrics(page, remaining_ms())
+        if not first_metrics:
             return
-        page_result["gate"] = info
-        if first:
-            notice.info("입장 버튼('%s') 클릭 후 점검 계속 (새 링크 %d개)", gate["text"], len(new_links))
-        else:
-            log.info("  입장 버튼 다시 클릭 후 점검 계속 (새 링크 %d개)", len(new_links))
-        self.gate_key = gate["key"]
+        while clicks + scrolls < cfg.load_more_max_clicks and time.monotonic() < stop_at and remaining_ms() > 3000:
+            if self.stop_event.is_set():
+                break
+            before = self._metrics(page, remaining_ms())
+            if not before:
+                break
+            try:
+                more = self._evaluate(page.main_frame, FIND_MORE_JS, options, min(5000, remaining_ms()))
+            except PlaywrightError:
+                more = None
+            if more:
+                if not self._click_js(page, "[data-ad-sentinel-more='1']", remaining_ms()):
+                    break
+                action = "click"
+            else:
+                try:
+                    self._evaluate(page.main_frame, "() => window.scrollTo(0, document.documentElement.scrollHeight)",
+                                   None, min(3000, remaining_ms()))
+                except PlaywrightError:
+                    break
+                action = "scroll"
+            wait = min(5000, max(0, int((stop_at - time.monotonic()) * 1000)))
+            after = self._wait_for_change(page, before, wait)
+            if normalize_url(page.url) != normalize_url(start_url):
+                log.info("  더보기 중 주소가 바뀌어 멈춤: %s", page.url)
+                break
+            if not after:
+                break
+            if action == "click":
+                clicks += 1
+            else:
+                scrolls += 1
+            log.info("  더보기 %s %d회: 화면 글자 %d자", "클릭" if action == "click" else "스크롤",
+                     clicks if action == "click" else scrolls, after["text"])
+
+        if clicks or scrolls:
+            last = self._metrics(page, remaining_ms()) or first_metrics
+            self._reextract(page, page_result, remaining_ms)
+            page_result["gate"]["load_more_clicks"] = clicks
+            page_result["gate"]["load_more_scrolls"] = scrolls
+            what = f"더보기 {clicks}회 클릭" if clicks else f"스크롤 {scrolls}회"
+            if clicks and scrolls:
+                what += f"·스크롤 {scrolls}회"
+            notice.info("%s, 게시글 영역 추가 수집 (화면 글자 %d자 → %d자)", what, first_metrics["text"], last["text"])
+
+    def _click_js(self, page: Page, selector: str, timeout_ms: int) -> bool:
+        try:
+            return bool(self._evaluate(page.main_frame, JS_CLICK, selector, max(1, min(3000, timeout_ms))))
+        except PlaywrightError:
+            return False
 
     def _add_sitemap_urls(self, context, start_url: str, queue: deque, seen: set) -> dict:
         cfg = self.config
@@ -353,7 +465,8 @@ class Crawler:
         if mode != "site" or result["meta"]["stopped_by_user"] or not pages:
             return []
         linked = [p for p in pages[1:] if {p["url"], p.get("final_url")} & self.content_linked]
-        if checked >= 2 and not linked:
+        gate = result["meta"].get("gate")
+        if checked >= 2 and not linked and not gate:
             from_sitemap = sum(1 for p in pages[1:] if p.get("found_on") == "sitemap.xml")
             if from_sitemap == checked - 1:
                 source = "sitemap.xml에 있는 주소"
@@ -367,8 +480,7 @@ class Crawler:
             return []
         if result["meta"].get("sitemap", {}).get("urls"):
             return []
-        gate = result["meta"].get("gate")
-        if gate and gate["links_after"] >= cfg.gate_link_threshold:
+        if gate and (gate["links_after"] >= cfg.gate_link_threshold or gate.get("text_after", 0) > gate.get("text_before", 0)):
             return []
         if gate:
             return [f"입장 버튼을 누른 뒤에도 발견한 링크가 적어 {checked}페이지만 점검했습니다. "

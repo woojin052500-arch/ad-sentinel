@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="utf-8"><title>익명토론 - 자유로운 토론</title>
+<style>
+  body { margin: 0; font-family: sans-serif; background: #1a1a1a; color: #eee; }
+  #loading { position: fixed; inset: 0; background: #000; color: #fff; display: flex; align-items: center;
+             justify-content: center; font-size: 24px; z-index: 50; }
+  .hero { height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .hero h1 { font-size: 64px; margin: 0 0 40px; }
+  .cta { display: inline-block; padding: 20px 48px; border: 1px solid #555; border-radius: 40px; color: #fff;
+         text-decoration: none; font-size: 22px; }
+  .side { position: fixed; right: 20px; top: 40%; }
+  .side a { display: block; color: #ccc; margin: 12px 0; text-decoration: none; }
+  section { min-height: 60vh; padding: 40px; }
+  #feed { padding: 20px 40px; filter: blur(3px); }
+  .post { border-bottom: 1px solid #333; padding: 16px 0; }
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 20; display: flex;
+              align-items: center; justify-content: center; }
+  .modal { background: #fff; color: #111; padding: 30px; border-radius: 12px; width: 420px; }
+  .more { display: block; margin: 20px auto; padding: 12px 30px; }
+</style></head>
+<body>
+  <div id="loading">로딩 중...</div>
+  <div id="landing">
+    <div class="hero" id="hero">
+      <h1>회원가입 없이, 바로 익명.</h1>
+      <a class="cta" href="javascript:startSite()">지금, 익명으로 시작하기 &gt;</a>
+      <p>지금까지 6,195개의 생각이 공유되었습니다.</p>
+    </div>
+    <nav class="side">
+      <a href="#hero">Hero</a><a href="#about">About</a><a href="#guideline">Guideline</a>
+      <a href="#faq">FAQ</a><a href="#start">시작하기</a>
+    </nav>
+    <section id="about"><h2>About</h2><p>누구나 익명으로 생각을 나누는 공간입니다.</p></section>
+    <section id="guideline"><h2>Guideline</h2><p>서로 존중해 주세요.</p></section>
+    <section id="faq"><h2>FAQ</h2><p>가입이 필요한가요? 아니요.</p></section>
+    <section id="start"><h2>시작하기</h2><p>위의 버튼을 눌러 시작하세요.</p></section>
+  </div>
+  <div id="app"></div>
+  <footer class="site-footer">
+    <a href="/terms.html">이용약관</a> | <a href="/privacy.html">개인정보처리방침</a> | <a href="/guide.html">서비스 안내</a>
+  </footer>
+  <script>
+    function clickLog(name) { fetch('/clicked/' + name); }
+    history.replaceState({}, '', '/?sec=hero');
+    setTimeout(function () { document.getElementById('loading').style.display = 'none'; }, 600);
+
+    var posts = [];
+    for (var i = 1; i <= 15; i++) {
+      var comment = '좋은 글이네요';
+      var extra = '';
+      if (i === 7) comment = '토토사이트 추천 가입코드 777 텔레그램 @toto777';
+      if (i === 12) extra = '<div class="c" style="display:none"><a href="http://casino.invalid/">카지노 먹튀검증 바로가기</a></div>';
+      posts.push('<div class="post" id="post-' + i + '"><h3>익명 ' + i + '번째 생각</h3>' +
+                 '<p>오늘 있었던 일을 적어 봅니다. 글 번호 ' + i + '</p>' +
+                 '<ul class="comments"><li>' + comment + '</li></ul>' + extra + '</div>');
+    }
+    var shown = 0;
+
+    function startSite() {
+      clickLog('start');
+      document.getElementById('loading').style.display = 'flex';
+      setTimeout(function () {
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('landing').style.display = 'none';
+        document.getElementById('app').innerHTML =
+          '<div id="feed"></div><div class="more" role="button" onclick="loadMore()">클릭하여 더보기</div>' +
+          '<div class="modal-bg" id="terms"><div class="modal"><h3>이용약관</h3><p>약관에 동의하셔야 글을 쓸 수 있습니다.</p>' +
+          '<button onclick="clickLog(\'agree\')">동의하고 계속하기</button> ' +
+          '<button onclick="clickLog(\'discord\')">디스코드 가입하기</button></div></div>';
+        loadMore();
+      }, 1000);
+    }
+
+    function loadMore() {
+      if (shown > 0) clickLog('more');
+      setTimeout(function () {
+        var feed = document.getElementById('feed');
+        feed.insertAdjacentHTML('beforeend', posts.slice(shown, shown + 5).join(''));
+        shown += 5;
+        if (shown >= posts.length) document.querySelector('.more').remove();
+      }, 400);
+    }
+  </script>
+</body>
+</html>

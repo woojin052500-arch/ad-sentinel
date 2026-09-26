@@ -202,3 +202,55 @@ def test_boilerplate_link_rules():
     assert is_boilerplate_link({"content": "공지사항", "footer": True})
     assert not is_boilerplate_link({"content": "자유게시판"})
     assert not is_boilerplate_link({"content": "사업 안내"})
+
+
+@pytest.fixture(scope="module")
+def feed_run():
+    server = Server("feed")
+    crawl = server.crawl("")
+    return crawl, server.requests
+
+
+def test_feed_gate_with_anchor_menu_and_javascript_button(feed_run):
+    crawl, requests = feed_run
+    assert len(crawl["pages"]) == 4
+    first = crawl["pages"][0]
+    gate = first["gate"]
+    assert gate["text"] == "지금, 익명으로 시작하기 >"
+    assert gate["url_changed"] is False and first["final_url"].endswith("/?sec=hero")
+    assert gate["text_after"] > gate["text_before"]
+    assert crawl["meta"]["notes"] == []
+    assert "/clicked/start" in requests
+
+
+def test_feed_load_more_collects_later_posts(feed_run):
+    crawl, requests = feed_run
+    first = crawl["pages"][0]
+    assert first["gate"]["load_more_clicks"] == 2
+    assert requests.count("/clicked/more") == 2
+    texts = " ".join(e["content"] for e in first["elements"] if e["type"] == "text")
+    assert "익명 15번째 생각" in texts
+    report = detect(crawl)
+    contents = {f["content"] for f in report["findings"]}
+    assert any("토토사이트 추천" in c for c in contents)
+    assert any("카지노 먹튀검증" in c for c in contents)
+
+
+def test_feed_consent_and_join_popups_are_not_clicked(feed_run):
+    crawl, requests = feed_run
+    assert "/clicked/agree" not in requests and "/clicked/discord" not in requests
+    texts = " ".join(e["content"] for e in crawl["pages"][0]["elements"] if e["type"] == "text")
+    assert "약관에 동의하셔야" in texts
+
+
+def test_feed_without_gate_warns_board_missing():
+    crawl = Server("feed").crawl("", enter_gate=False)
+    assert len(crawl["pages"]) == 4
+    assert "게시판 페이지를 찾지 못했을 수 있습니다" in crawl["meta"]["notes"][0]
+
+
+def test_anchor_links_are_not_content_links():
+    from ad_sentinel.crawler.gate import is_boilerplate_link
+
+    assert is_boilerplate_link({"content": "About", "raw_href": "#about"})
+    assert not is_boilerplate_link({"content": "자유게시판", "raw_href": "/board"})

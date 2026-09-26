@@ -6,6 +6,9 @@ GATE_WORDS = [
     "enter", "entersite", "entry", "start", "continue", "go", "gotomain", "ok",
 ]
 
+GATE_PARTS = ["입장", "들어가기", "시작하기", "시작", "계속하기", "둘러보기", "메인으로", "홈으로",
+              "enter", "start", "continue", "getstarted"]
+
 STRONG_GATE_WORDS = [
     "입장", "입장하기", "사이트입장", "홈페이지입장", "지금입장", "바로입장", "들어가기", "enter", "entersite", "entry",
 ]
@@ -18,16 +21,14 @@ DANGER_WORDS = [
     "결제", "구매", "주문", "pay", "checkout", "order", "buy", "삭제", "delete", "remove", "신고", "report",
     "탈퇴", "로그아웃", "logout", "비밀번호", "password", "다운로드", "download", "설치", "install",
     "구독", "subscribe", "후원", "donate", "전송", "submit", "send",
+    "동의", "agree", "accept", "허용", "allow", "consent", "수락", "쿠키", "cookie", "디스코드", "discord",
 ]
 
-FIND_GATE_JS = r"""
-(opts) => {
-    const GATE = new Set(opts.gateWords);
-    const STRONG = new Set(opts.strongWords);
+MAX_GATE_CANDIDATES = 3
+
+DANGER_CHECK_JS = r"""
     const DANGER = opts.dangerWords.map(w => w.toLowerCase()).map(w =>
         /^[a-z ]+$/.test(w) ? new RegExp('(^|[^a-z])' + w + '([^a-z]|$)') : w);
-    const prefer = (opts.prefer || '').toLowerCase();
-    const norm = s => (s || '').toLowerCase().replace(/[\s >»→▶▷►·.!,:~\-_\[\]()<«←◀◁]+/g, '');
 
     function labelOf(el) {
         let t = el.innerText || el.value || el.getAttribute('aria-label') || el.title || '';
@@ -54,46 +55,107 @@ FIND_GATE_JS = r"""
         return false;
     }
 
-    function visible(el) {
+    function visibleArea(el) {
         const st = getComputedStyle(el);
         if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) < 0.1) return 0;
         const r = el.getBoundingClientRect();
         return r.width > 4 && r.height > 4 ? r.width * r.height : 0;
     }
+"""
+
+FIND_GATE_JS = r"""
+(opts) => {
+""" + DANGER_CHECK_JS + r"""
+    const GATE = new Set(opts.gateWords);
+    const STRONG = new Set(opts.strongWords);
+    const prefer = (opts.prefer || '').toLowerCase();
+    const norm = s => (s || '').toLowerCase().replace(/[\s >»→▶▷►·.!,:~\-_\[\]()<«←◀◁]+/g, '');
+    const hasPart = key => opts.gateParts.some(w => /^[a-z]+$/.test(w)
+        ? new RegExp('(^|[^a-z])' + w + '([^a-z]|$)').test(key) : key.includes(w));
 
     const candidates = document.querySelectorAll(
         'a, button, input[type=button], input[type=submit], input[type=image], [role=button], [onclick], area');
-    let best = null;
+    const found = [];
     for (const el of candidates) {
         if (el.closest(opts.footerSelector)) continue;
+        const href = (el.getAttribute('href') || '').trim();
+        if (href.startsWith('#') && !el.getAttribute('onclick')) continue;
         const label = labelOf(el);
         if (!label || label.length > 30) continue;
         const key = norm(label);
         let score = 0;
         if (prefer) score = key === prefer ? 3 : 0;
         else if (GATE.has(key)) score = 2;
-        else if (key.includes('입장') || key.startsWith('enter')) score = 1;
+        else if (hasPart(key)) score = 1;
         if (!score || isDanger(el, label)) continue;
-        const area = visible(el);
+        const area = visibleArea(el);
         if (!area) continue;
-        if (!best || score > best.score || (score === best.score && area > best.area))
-            best = { el, score, area, label, key };
+        const strong = STRONG.has(key) || key.includes('입장') || key.includes('들어가기');
+        const rank = area * (strong ? 2 : 1) * (score >= 2 ? 1.2 : 1);
+        const weak = score === 2 && !strong && !hasPart(key);
+        found.push({ el, label, key, score, strong, weak, area, rank, href });
     }
     for (const old of document.querySelectorAll('[data-ad-sentinel-gate]')) old.removeAttribute('data-ad-sentinel-gate');
+    found.sort((a, b) => b.rank - a.rank);
+    return found.slice(0, opts.maxCandidates).map((c, i) => {
+        c.el.setAttribute('data-ad-sentinel-gate', String(i + 1));
+        if (c.el.getAttribute('target')) c.el.removeAttribute('target');
+        const rect = c.el.getBoundingClientRect();
+        return { index: i + 1, text: c.label, key: c.key, tag: c.el.tagName.toLowerCase(), href: c.href,
+                 strong: c.strong, weak: c.weak, viewport_ratio: c.area / Math.max(1, window.innerWidth * window.innerHeight),
+                 first_screen: rect.top + window.scrollY < window.innerHeight };
+    });
+}
+"""
+
+FIND_MORE_JS = r"""
+(opts) => {
+""" + DANGER_CHECK_JS + r"""
+    const MORE = /^\+?\s*(클릭\s*(하여|해서)\s*)?(글\s*)?(더\s*보기|더\s*불러오기|더\s*읽기|게시글\s*더\s*보기)(\s*[+▼⌄∨v>]*)?\s*(\(\d+\))?$|^(load|show|view|see)\s+more(\s+posts?)?$|^more$/i;
+    for (const old of document.querySelectorAll('[data-ad-sentinel-more]')) old.removeAttribute('data-ad-sentinel-more');
+    const candidates = document.querySelectorAll('a, button, [role=button], [onclick], div, span, li, p');
+    let best = null;
+    for (const el of candidates) {
+        const label = labelOf(el);
+        if (!label || label.length > 20 || !MORE.test(label)) continue;
+        if (el.querySelector('a, button, [role=button], [onclick]') && !el.matches('a, button, [role=button], [onclick]'))
+            continue;
+        if (isDanger(el, label)) continue;
+        const href = (el.getAttribute('href') || '').trim();
+        if (href && !href.startsWith('#') && !/^javascript:/i.test(href)) continue;
+        const area = visibleArea(el);
+        if (!area) continue;
+        const r = el.getBoundingClientRect();
+        const y = r.top + window.scrollY;
+        if (!best || y > best.y) best = { el, label, y };
+    }
     if (!best) return null;
-    let contentChars = (document.body.innerText || '').replace(/\s+/g, '').length;
-    for (const f of document.querySelectorAll(opts.footerSelector))
-        if (!f.parentElement || !f.parentElement.closest(opts.footerSelector))
-            contentChars -= (f.innerText || '').replace(/\s+/g, '').length;
-    const rect = best.el.getBoundingClientRect();
-    best.el.setAttribute('data-ad-sentinel-gate', '1');
-    if (best.el.getAttribute('target')) best.el.removeAttribute('target');
-    return { text: best.label, key: best.key, tag: best.el.tagName.toLowerCase(),
-             score: best.score, strong: STRONG.has(best.key) || best.key.includes('입장'),
-             viewport_ratio: best.area / Math.max(1, window.innerWidth * window.innerHeight),
-             first_screen: rect.top + window.scrollY < window.innerHeight,
-             content_chars: Math.max(0, contentChars),
-             href: best.el.getAttribute('href') || '' };
+    best.el.setAttribute('data-ad-sentinel-more', '1');
+    return { text: best.label };
+}
+"""
+
+PAGE_METRICS_JS = r"""
+() => {
+    const text = document.body ? (document.body.innerText || '').replace(/\s+/g, '') : '';
+    let hash = 0;
+    for (let i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) | 0;
+    return {
+        text: text.length,
+        hash,
+        nodes: document.body ? document.body.getElementsByTagName('*').length : 0,
+        height: document.documentElement.scrollHeight,
+        url: location.href,
+    };
+}
+"""
+
+JS_CLICK = r"""
+(selector) => {
+    const el = document.querySelector(selector);
+    if (!el) return false;
+    el.click();
+    return true;
 }
 """
 
@@ -106,4 +168,18 @@ BOILERPLATE_LINK = re.compile(
 
 
 def is_boilerplate_link(record: dict) -> bool:
-    return bool(record.get("footer")) or bool(BOILERPLATE_LINK.search(record.get("content") or ""))
+    if record.get("footer") or (record.get("raw_href") or "").strip().startswith("#"):
+        return True
+    return bool(BOILERPLATE_LINK.search(record.get("content") or ""))
+
+
+def content_changed(before: dict, after: dict) -> bool:
+    if after["url"].split("#")[0] != before["url"].split("#")[0] and after["text"] > 0:
+        return True
+    if after.get("hash") == before.get("hash"):
+        return False
+    text_diff = abs(after["text"] - before["text"])
+    node_diff = abs(after["nodes"] - before["nodes"])
+    return ((text_diff >= 10 and text_diff >= before["text"] * 0.3)
+            or (node_diff >= 3 and node_diff >= before["nodes"] * 0.3)
+            or text_diff >= 1000 or node_diff >= 100)
