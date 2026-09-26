@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -58,7 +59,7 @@ def test_zero_findings_shows_summary_and_unchecked(app):
     detail = app.detail.get("1.0", "end")
     assert "발견된 불법광고가 없습니다" in detail and "점검한 페이지: 10개" in detail
     assert "점검하지 못한 영역: 1곳" in detail
-    assert app.unchecked_button.winfo_manager() == "pack"
+    assert app.unchecked_button.winfo_manager() == "grid"
     assert app.unchecked_text.get() == "⚠ 점검하지 못한 영역 1곳"
     app._show_unchecked()
     detail = app.detail.get("1.0", "end")
@@ -166,7 +167,52 @@ def test_unchecked_explanation(app):
     report = detect(crawl)
     app._show_report(crawl, report)
     assert report.get("unchecked")
-    assert app.unchecked_help.winfo_manager() == "pack"
+    assert app.unchecked_help.winfo_manager() == "grid"
     app._show_unchecked()
     text = app.detail.get("1.0", "end")
     assert "왜 확인해야 하나요" in text and "숨겨진 iframe" in text
+
+
+def _visible_controls(widget):
+    for child in widget.winfo_children():
+        if child.winfo_ismapped() and child.winfo_class() in ("TButton", "TCheckbutton", "TRadiobutton", "Canvas"):
+            yield child
+        yield from _visible_controls(child)
+
+
+@pytest.mark.parametrize("mode", ["site", "list"])
+def test_all_controls_fit_at_minimum_size(app, mode):
+    app.mode.set(mode)
+    app._on_mode_change()
+    app.show_advanced.set(True)
+    app._toggle_advanced()
+    crawl = json.loads((Path(__file__).parent / "fixtures" / "mois_sample.json").read_text(encoding="utf-8"))
+    app._show_report(crawl, detect(crawl))
+    min_w, min_h = app.minsize()
+    app.geometry(f"{min_w}x{min_h}")
+    app.update()
+    right = app.winfo_rootx() + app.winfo_width()
+    controls = list(_visible_controls(app))
+    assert len(controls) > 20
+    clipped = [(c.winfo_class(), c.cget("text") if c.winfo_class() != "Canvas" else "?")
+               for c in controls if c.winfo_rootx() + c.winfo_width() > right + 1 or c.winfo_width() < c.winfo_reqwidth()]
+    assert clipped == []
+
+
+def test_resize_is_debounced(app, monkeypatch):
+    done = []
+    monkeypatch.setattr(app, "_on_resize_done", lambda: done.append(app.winfo_width()))
+    app.update()
+    w, h = app.winfo_width(), app.winfo_height()
+    for step in range(5):
+        app.geometry(f"{w - 10 * (step + 1)}x{h}")
+        app.update()
+    assert app._resize_job is not None and done == []
+    app.after(400, app.quit)
+    app.mainloop()
+    assert len(done) == 1
+
+
+def test_icons_are_loaded(app):
+    assert app.icon_problems == []
+    assert len(app._icon_images) == 6 and app._icon_images[0].width() == 256

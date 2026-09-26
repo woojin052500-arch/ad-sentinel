@@ -8,6 +8,7 @@ NAVY = (22, 63, 122, 255)
 BLUE = (41, 112, 204, 255)
 WHITE = (255, 255, 255, 255)
 RED = (226, 59, 59, 255)
+PHOTO_SIZES = (16, 24, 32, 48, 64)
 
 
 def draw() -> Image.Image:
@@ -29,6 +30,8 @@ def main():
     ASSETS.mkdir(parents=True, exist_ok=True)
     img = draw()
     img.resize((256, 256), Image.LANCZOS).save(ASSETS / "icon.png")
+    for size in PHOTO_SIZES:
+        img.resize((size, size), Image.LANCZOS).save(ASSETS / f"icon_{size}.png")
     img.save(ASSETS / "icon.ico", sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
     print(f"아이콘 생성: {ASSETS}")
 

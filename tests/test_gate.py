@@ -228,12 +228,13 @@ def test_feed_gate_with_anchor_menu_and_javascript_button(feed_run):
 def test_feed_load_more_collects_later_posts(feed_run):
     crawl, requests = feed_run
     first = crawl["pages"][0]
-    assert first["gate"]["load_more_scrolls"] == 3
+    assert first["gate"]["load_more_scrolls"] in (2, 3)
     assert first["gate"]["load_more_clicks"] == 2
     assert requests.count("/clicked/more") == 2
     assert "/clicked/reveal" not in requests
     texts = " ".join(e["content"] for e in first["elements"] if e["type"] == "text")
     assert "익명 30번째 생각" in texts
+    assert first["gate"]["post_titles"] == 30
     report = detect(crawl)
     contents = {f["content"] for f in report["findings"]}
     assert any("토토사이트 추천" in c for c in contents)

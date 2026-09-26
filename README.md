@@ -43,8 +43,9 @@ ad-sentinel/
 │   │   └── reflection.py      #   URL 파라미터 반사 판별 (UTF-8·EUC-KR 디코딩)
 │   ├── gui/app.py             # [3단계] GUI (Tkinter + sv-ttk 테마)
 │   ├── gui/tooltip.py         #   설정 옆 ? 아이콘과 설명 말풍선
+│   ├── gui/winicon.py         #   Windows 전용: DPI 인식, 작업 표시줄 ID(AppUserModelID), 창 아이콘(WM_SETICON)
 │   ├── help_texts.py          # 화면 설명 문구 모음 (설정·결과 설명, 3단계 사용법, 사용설명서용 Markdown 출력)
-│   ├── assets/                # 창·exe 아이콘 (icon.ico, icon.png)
+│   ├── assets/                # 창·exe 아이콘 (icon.ico, icon.png, icon_16~64.png)
 │   ├── url_list.py            # URL 목록 파일 읽기 (txt, csv, 서치 콘솔 내보내기 zip)
 │   └── report.py              # 결과 내보내기 (JSON, CSV, HTML 보고서)
 ├── tests/
@@ -126,8 +127,16 @@ python demo_server.py            # 기본 포트 8000, --port 로 변경
 - 코드가 단순해서 심사 때 구조를 설명하기 쉽습니다.
 - 화면은 [sv-ttk](https://github.com/rdbende/Sun-Valley-ttk-theme)(Windows 11 스타일 테마, 라이트 모드)를 씁니다. 순수 Tcl 테마 파일이라
   PyInstaller 기본 훅(`hook-sv_ttk`)이 자동으로 포함하며, 설치되어 있지 않으면 기본 테마로 동작합니다.
-- 고해상도(DPI 배율 125%·150% 등): 프로세스 DPI 인식을 켜고, 창 크기·열 너비·테마 글꼴(픽셀 단위)을 배율에 맞춰 키웁니다.
-- 아이콘: `ad_sentinel/assets/icon.ico`(창·exe 공용). `python packaging/make_icon.py`로 다시 만들 수 있습니다.
+- 고해상도(DPI 배율 125%·150% 등): 프로세스 DPI 인식을 **시스템 단위**(`SetProcessDpiAwareness(1)`, 파이썬 IDLE과 같은 방식)로 켜고,
+  창 크기·열 너비·테마 글꼴(픽셀 단위)을 배율에 맞춰 키웁니다. 모니터별(Per-Monitor) 인식은 Tk 8.6이 모니터 사이 배율 변경을
+  처리하지 못해 글자 잘림·겹침이 생길 수 있어 쓰지 않습니다.
+- 창 크기: 최소 크기는 화면 내용이 필요로 하는 폭 이상으로 정해, 가장 작게 줄여도 모든 버튼이 보입니다. 결과 영역 윗줄은
+  저장 버튼을 먼저 배치하고 요약 문구가 줄어들게 했습니다. 크기를 바꾸는 동안에는 말풍선을 닫고, 안내 문구 줄바꿈 폭은
+  크기 조절이 멈춘 뒤(0.15초) 한 번만 다시 계산합니다. 창 바탕색을 테마 색과 맞춰 크기 조절 중 깜빡임을 줄였습니다.
+- 아이콘: `ad_sentinel/assets/icon.ico`(창·exe 공용)와 `icon.png`·`icon_16~64.png`. `python packaging/make_icon.py`로 다시 만들 수 있습니다.
+  창 아이콘은 `iconbitmap`(ico)과 `iconphoto`(여러 크기 png)를 함께 적용하고, Windows에서는 Win32 `WM_SETICON`으로 작은·큰 아이콘을
+  한 번 더 지정합니다. (한글이 들어간 폴더 경로에서도 동작) 작업 표시줄이 python.exe 아이콘 대신 전용 아이콘을 쓰도록
+  `SetCurrentProcessExplicitAppUserModelID`로 앱 ID(`ADSentinel.PublicWebAdScanner`)를 정합니다. 아이콘 설정에 실패하면 상세 로그에 이유가 남습니다.
 
 ## 설치 및 실행 (개발 환경)
 

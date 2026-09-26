@@ -13,6 +13,7 @@ from ad_sentinel.config import OWN_SITE_LABEL, ROBOTS_IGNORE_WARNING, CrawlConfi
 from ad_sentinel.crawler import Crawler
 from ad_sentinel.detector import detect
 from ad_sentinel.detector.domains import DEFAULT_WHITELIST, read_user_whitelist, save_user_whitelist
+from ad_sentinel.gui import winicon
 from ad_sentinel.gui.tooltip import HelpIcon, Tooltip, help_content
 from ad_sentinel.help_texts import (COLUMNS, QUICK_START, QUICK_START_FOOTER, QUICK_START_TITLE, SETTINGS,
                                     UNCHECKED, estimate_text, quick_start_text)
@@ -29,6 +30,10 @@ LIST_FILE_TYPES = [("주소 목록 파일", "*.txt *.csv *.tsv *.zip"), ("모든
 KOREAN_FONTS = ("Malgun Gothic", "맑은 고딕", "Noto Sans CJK KR", "Noto Sans KR", "NanumGothic", "WenQuanYi Zen Hei")
 MAX_LOG_LINES = 3000
 HINT_COLOR = "#6b7280"
+RESIZE_SETTLE_MS = 150
+ICON_PHOTO_SIZES = (256, 64, 48, 32, 24, 16)
+
+log = logging.getLogger(__name__)
 
 
 class QueueLogHandler(logging.Handler):
@@ -50,8 +55,8 @@ class App(tk.Tk):
         self.title(f"{APP_TITLE} (v{__version__})")
         self.scale = max(1.0, self.winfo_fpixels("1i") / 96.0)
         _apply_theme(self, self.scale)
-        _set_icon(self)
-        self._fit_window(1280, 800, 1100, 700)
+        self.configure(background=ttk.Style(self).lookup("TFrame", "background") or "#fafafa")
+        self.icon_problems = _set_icon(self)
         ttk.Style(self).configure("TLabelframe.Label", font=_bold_font())
 
         self.events: queue.Queue = queue.Queue()
@@ -84,8 +89,13 @@ class App(tk.Tk):
         self.unchecked_text = tk.StringVar(value="")
         self.estimate = tk.StringVar(value="")
         self.help_icons: dict[str, HelpIcon] = {}
+        self.wrap_labels: list[ttk.Label] = []
 
         self._build()
+        self._fit_window(1280, 800, 1000, 700)
+        self._resize_job: str | None = None
+        self._last_size = (0, 0)
+        self.bind("<Configure>", self._on_configure, add="+")
         self._on_mode_change()
         self.max_pages.trace_add("write", lambda *_: self._update_estimate())
         self._update_estimate()
@@ -94,6 +104,9 @@ class App(tk.Tk):
         self.log_handler = QueueLogHandler(self.events)
         logging.getLogger("ad_sentinel").addHandler(self.log_handler)
         logging.getLogger("ad_sentinel").setLevel(logging.INFO)
+        for problem in self.icon_problems:
+            log.info("아이콘 설정 실패: %s", problem)
+        self.after(200, self._apply_native_icon)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(100, self._poll_events)
 
@@ -101,11 +114,39 @@ class App(tk.Tk):
         return int(value * self.scale)
 
     def _fit_window(self, width: int, height: int, min_width: int, min_height: int):
+        self.update_idletasks()
         screen_w, screen_h = self.winfo_screenwidth(), self.winfo_screenheight()
-        w = min(self.px(width), screen_w - self.px(40))
+        need_w = max(self.px(min_width), self.winfo_reqwidth())
+        w = min(max(self.px(width), need_w), screen_w - self.px(40))
         h = min(self.px(height), screen_h - self.px(80))
         self.geometry(f"{w}x{h}+{max(0, (screen_w - w) // 2)}+{max(0, (screen_h - h) // 3)}")
-        self.minsize(min(self.px(min_width), w), min(self.px(min_height), h))
+        self.minsize(min(need_w, w), min(self.px(min_height), h))
+
+    def _apply_native_icon(self):
+        problem = _set_native_icon(self)
+        if problem:
+            log.info("아이콘 설정 실패: %s", problem)
+
+    def _on_configure(self, event):
+        if event.widget is not self or (event.width, event.height) == self._last_size:
+            return
+        self._last_size = (event.width, event.height)
+        if self._resize_job:
+            self.after_cancel(self._resize_job)
+        else:
+            self._hide_tooltips()
+        self._resize_job = self.after(RESIZE_SETTLE_MS, self._on_resize_done)
+
+    def _on_resize_done(self):
+        self._resize_job = None
+        width = self.winfo_width()
+        for label in self.wrap_labels:
+            label.configure(wraplength=max(self.px(300), width - self.px(80)))
+
+    def _hide_tooltips(self):
+        self.table_tooltip.hide()
+        for icon in self.help_icons.values():
+            icon.tooltip.hide()
 
     def _build(self):
         pad = self.px(6)
@@ -115,7 +156,8 @@ class App(tk.Tk):
         mode_box = ttk.LabelFrame(root, text="1. 점검 방식", padding=pad)
         mode_box.pack(fill="x")
         ttk.Radiobutton(mode_box, text="사이트 점검 - 시작 주소에서 링크를 따라가며 하위 페이지를 점검",
-                        variable=self.mode, value=SITE, command=self._on_mode_change).grid(row=0, column=0, sticky="w")
+                        variable=self.mode, value=SITE, command=self._on_mode_change).grid(row=0, column=0, sticky="w",
+                                                                                           padx=(0, pad))
         ttk.Radiobutton(mode_box, text="URL 목록 점검 - 주소 목록 파일(서치 콘솔에서 내보낸 파일 등)에 있는 주소만 점검",
                         variable=self.mode, value=LIST, command=self._on_mode_change).grid(row=1, column=0, sticky="w")
         intro = ttk.Frame(mode_box)
@@ -126,7 +168,7 @@ class App(tk.Tk):
         ttk.Button(intro_top, text="3단계 사용법", command=self._show_quick_start_dialog).pack(side="left")
         ttk.Button(intro_top, text="설정·결과 설명", command=self._show_help_window).pack(side="left", padx=(pad, 0))
         ttk.Label(intro, text="설정 옆 ? 에 마우스를 올리면 설명이 나옵니다.", foreground=HINT_COLOR).pack(anchor="e")
-        mode_box.columnconfigure(1, weight=1)
+        mode_box.columnconfigure(0, weight=1)
 
         target = ttk.LabelFrame(root, text="2. 점검 대상", padding=pad)
         target.pack(fill="x", pady=(pad, 0))
@@ -151,27 +193,28 @@ class App(tk.Tk):
         gate_row = ttk.Frame(self.site_frame)
         gate_row.grid(row=3, column=0, columnspan=2, sticky="w", pady=(pad, 0))
         ttk.Checkbutton(gate_row, variable=self.enter_gate,
-                        text="첫 화면의 '입장' 버튼 자동 클릭 (입장해야 본 화면이 나오는 사이트용, "
-                             "로그인·가입·결제·삭제·신고 버튼은 누르지 않음)").pack(side="left")
+                        text="첫 화면의 '입장' 버튼 자동 클릭 (로그인·가입·결제·삭제·신고 버튼은 누르지 않음)").pack(side="left")
         self._help(gate_row, "enter_gate").pack(side="left", padx=(pad // 2, 0))
         sitemap_label = ttk.Frame(self.site_frame)
         sitemap_label.grid(row=4, column=0, sticky="w", padx=(0, pad), pady=(pad, 0))
         ttk.Label(sitemap_label, text="sitemap 또는 RSS 주소 (선택)").pack(side="left")
         self._help(sitemap_label, "sitemap").pack(side="left", padx=(pad // 2, 0))
         ttk.Entry(self.site_frame, textvariable=self.sitemap_url).grid(row=4, column=1, sticky="we", pady=(pad, 0))
-        ttk.Label(self.site_frame, foreground=HINT_COLOR,
-                  text="예: https://www.example.go.kr/all/sitemap.xml · 비워 두면 robots.txt와 흔한 위치"
-                       "(/sitemap.xml, /all/sitemap.xml, /rss 등)를 자동으로 찾습니다.").grid(row=5, column=1, sticky="w")
+        sitemap_hint = ttk.Label(self.site_frame, foreground=HINT_COLOR, justify="left",
+                                 text="예: https://www.example.go.kr/all/sitemap.xml · 비워 두면 자동으로 찾습니다.")
+        sitemap_hint.grid(row=5, column=1, sticky="w")
+        self.wrap_labels.append(sitemap_hint)
         self.site_frame.columnconfigure(1, weight=1)
 
         self.list_frame = ttk.Frame(target)
         ttk.Button(self.list_frame, text="목록 파일 불러오기...", command=self._load_list).grid(
             row=0, column=0, sticky="w")
         ttk.Label(self.list_frame, textvariable=self.list_info).grid(row=0, column=1, sticky="w", padx=pad)
-        ttk.Label(self.list_frame, foreground=HINT_COLOR,
-                  text="txt(한 줄에 주소 하나), CSV(첫 번째 열), 구글 서치 콘솔 '내보내기' 파일(csv 또는 zip)을 읽습니다. "
-                       "목록의 주소만 점검하고 링크는 따라가지 않습니다.").grid(
-            row=1, column=0, columnspan=2, sticky="w", pady=(pad, 0))
+        list_hint = ttk.Label(self.list_frame, foreground=HINT_COLOR, justify="left",
+                              text="txt(한 줄에 주소 하나), CSV(첫 번째 열), 구글 서치 콘솔 '내보내기' 파일(csv 또는 zip)을 읽습니다. "
+                                   "목록의 주소만 점검하고 링크는 따라가지 않습니다.", wraplength=self.px(900))
+        list_hint.grid(row=1, column=0, columnspan=2, sticky="w", pady=(pad, 0))
+        self.wrap_labels.append(list_hint)
         self.list_frame.columnconfigure(1, weight=1)
 
         bottom = ttk.Frame(target)
@@ -226,19 +269,20 @@ class App(tk.Tk):
         results.pack(fill="both", expand=True, pady=(pad, 0))
         header = ttk.Frame(results)
         header.pack(fill="x")
-        ttk.Label(header, textvariable=self.summary, font=_bold_font()).pack(side="left")
+        ttk.Label(header, textvariable=self.summary, font=_bold_font()).grid(row=0, column=0, sticky="w")
         self.unchecked_button = ttk.Button(header, textvariable=self.unchecked_text, command=self._show_unchecked)
         self.unchecked_help = self._help(header, "unchecked")
-        for text, command in [("HTML 보고서로 저장", self._export_html), ("CSV로 저장", self._export_csv),
-                              ("JSON으로 저장", self._export_json)]:
-            ttk.Button(header, text=text, command=command).pack(side="right", padx=(pad, 0))
+        for column, (text, command) in enumerate([("JSON으로 저장", self._export_json), ("CSV로 저장", self._export_csv),
+                                                  ("HTML 보고서로 저장", self._export_html)], 3):
+            ttk.Button(header, text=text, command=command).grid(row=0, column=column, padx=(pad, 0))
+        header.columnconfigure(0, weight=1)
 
         panes = ttk.PanedWindow(results, orient="horizontal")
         panes.pack(fill="both", expand=True, pady=(pad, 0))
         panes.add(self._build_table(panes), weight=5)
 
         detail_frame = ttk.Frame(panes)
-        self.detail = self._text_box(detail_frame, wrap="word", width=36)
+        self.detail = self._text_box(detail_frame, wrap="word", width=30)
         body = font.nametofont("TkTextFont")
         self.detail.tag_configure("title", font=(body.actual("family"), body.actual("size") + 1, "bold"))
         self.detail.tag_configure("label", font=(body.actual("family"), body.actual("size"), "bold"),
@@ -263,7 +307,7 @@ class App(tk.Tk):
         for key, title, sample in columns:
             width = max(heading_font.measure(f"{title} ?"), cell_font.measure(sample)) + self.px(28)
             if key == "content":
-                width = self.px(240)
+                width = self.px(180)
             self.table.heading(key, text=f"{title} ?")
             self.table.column(key, width=width, minwidth=width if key != "content" else self.px(120),
                               anchor="w" if key == "content" else "center", stretch=key == "content")
@@ -555,8 +599,8 @@ class App(tk.Tk):
         self.crawl_result, self.report = None, None
         self.table.delete(*self.table.get_children())
         self.summary.set("")
-        self.unchecked_button.pack_forget()
-        self.unchecked_help.pack_forget()
+        self.unchecked_button.grid_remove()
+        self.unchecked_help.grid_remove()
         self._show_guide("점검이 끝나면 결과가 여기에 표시됩니다.")
 
     def _show_report(self, crawl: dict | None, report: dict):
@@ -572,12 +616,12 @@ class App(tk.Tk):
         self.summary.set(f"발견 {s['findings']}건  (불법광고 의심 {s['high']}건 · 검토 필요 {s['suspect']}건)"
                          f"  ·  점검 페이지 {report['meta'].get('page_count', 0)}개")
         unchecked = len(report.get("unchecked", []))
-        self.unchecked_button.pack_forget()
-        self.unchecked_help.pack_forget()
+        self.unchecked_button.grid_remove()
+        self.unchecked_help.grid_remove()
         if unchecked:
             self.unchecked_text.set(f"⚠ 점검하지 못한 영역 {unchecked}곳")
-            self.unchecked_button.pack(side="left", padx=(self.px(12), self.px(3)))
-            self.unchecked_help.pack(side="left")
+            self.unchecked_button.grid(row=0, column=1, padx=(self.px(12), self.px(3)))
+            self.unchecked_help.grid(row=0, column=2, sticky="w")
         self._show_overview()
 
     def _show_overview(self):
@@ -823,25 +867,41 @@ def _apply_theme(root: tk.Tk, scale: float):
             f.configure(**options)
 
 
-def _set_icon(window: tk.Misc):
+def _set_icon(window: tk.Tk) -> list[str]:
+    problems = []
+    ico = str(asset_path("icon.ico"))
+    if winicon.is_windows():
+        try:
+            window.iconbitmap(default=ico)
+        except tk.TclError as e:
+            problems.append(f"iconbitmap: {e}")
+    images = []
+    for size in ICON_PHOTO_SIZES:
+        path = asset_path("icon.png" if size == 256 else f"icon_{size}.png")
+        try:
+            images.append(tk.PhotoImage(master=window, file=str(path)))
+        except tk.TclError as e:
+            problems.append(f"{path.name}: {e}")
+    if images:
+        try:
+            window.iconphoto(True, *images)
+        except tk.TclError as e:
+            problems.append(f"iconphoto: {e}")
+    window._icon_images = images
+    return problems
+
+
+def _set_native_icon(window: tk.Tk) -> str:
+    if not winicon.is_windows():
+        return ""
     try:
-        window._icon_image = tk.PhotoImage(master=window, file=str(asset_path("icon.png")))
-        window.iconphoto(True, window._icon_image)
-    except tk.TclError:
-        pass
-    try:
-        window.iconbitmap(default=str(asset_path("icon.ico")))
-    except tk.TclError:
-        pass
+        window._icon_handles = winicon.set_native_icon(window, str(asset_path("icon.ico")))
+    except (OSError, tk.TclError, ValueError) as e:
+        return f"WM_SETICON: {e}"
+    return ""
 
 
 def run_gui():
-    try:
-        import ctypes
-        try:
-            ctypes.windll.shcore.SetProcessDpiAwareness(2)
-        except Exception:
-            ctypes.windll.user32.SetProcessDPIAware()
-    except Exception:
-        pass
+    winicon.set_dpi_awareness()
+    winicon.set_app_user_model_id()
     App().mainloop()
