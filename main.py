@@ -12,6 +12,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("url", help="탐색을 시작할 URL")
     p.add_argument("--max-pages", type=int, default=30, help="최대 방문 페이지 수 (기본 30)")
     p.add_argument("--depth", type=int, default=3, help="링크를 따라갈 최대 깊이 (기본 3)")
+    p.add_argument("--page-timeout", type=float, default=60, help="페이지 하나의 전체 제한 시간(초) (기본 60)")
     p.add_argument("--delay", type=float, default=0.5, help="페이지 사이 대기 시간(초) (기본 0.5)")
     p.add_argument("--out", default=None, help="결과 JSON 경로 (기본: output/crawl_날짜_시간.json)")
     p.add_argument("--same-host-only", action="store_true", help="하위 도메인은 탐색하지 않음")
@@ -30,6 +31,7 @@ def main(argv=None) -> int:
         max_pages=args.max_pages,
         max_depth=args.depth,
         delay_sec=args.delay,
+        page_total_timeout_sec=args.page_timeout,
         include_subdomains=not args.same_host_only,
         respect_robots=not args.ignore_robots,
         headless=not args.show_browser,

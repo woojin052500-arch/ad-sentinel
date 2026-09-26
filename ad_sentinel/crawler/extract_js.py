@@ -1,19 +1,23 @@
-CSS_SELECTOR_FN = r"""
-function cssSelector(el) {
-    if (!el || el.nodeType !== 1) return '';
-    const doc = el.ownerDocument;
+SELECTOR_JS = r"""
+(el) => {
     const parts = [];
     let cur = el;
     while (cur && cur.nodeType === 1) {
-        if (cur.id && doc.querySelectorAll('#' + CSS.escape(cur.id)).length === 1) {
+        if (cur.id && cur.ownerDocument.querySelectorAll('#' + CSS.escape(cur.id)).length === 1) {
             parts.unshift('#' + CSS.escape(cur.id));
             break;
         }
         let part = cur.tagName.toLowerCase();
         const parent = cur.parentElement;
         if (!parent) { parts.unshift(part); break; }
-        const same = Array.from(parent.children).filter(c => c.tagName === cur.tagName);
-        if (same.length > 1) part += ':nth-of-type(' + (same.indexOf(cur) + 1) + ')';
+        let index = 1, count = 0;
+        for (const c of parent.children) {
+            if (c.tagName === cur.tagName) {
+                count++;
+                if (c === cur) index = count;
+            }
+        }
+        if (count > 1) part += ':nth-of-type(' + index + ')';
         parts.unshift(part);
         cur = parent;
     }
@@ -21,19 +25,32 @@ function cssSelector(el) {
 }
 """
 
-SELECTOR_JS = "(el) => {" + CSS_SELECTOR_FN + " return cssSelector(el); }"
-
-EXTRACT_JS = "(opts) => {" + CSS_SELECTOR_FN + r"""
-    const MAX_ELEMENTS = opts.maxElements;
+EXTRACT_JS = r"""
+(opts) => {
+    const MAX_RECORDS = opts.maxRecords;
+    const MAX_SCAN = opts.maxScan;
     const MAX_TEXT = opts.maxTextLen;
+    const TIME_BUDGET = opts.timeBudgetMs;
+    const t0 = performance.now();
+
     const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'META', 'LINK',
-                               'BR', 'HR', 'OPTION', 'PATH', 'DEFS', 'SYMBOL', 'USE']);
+                               'BR', 'HR', 'OPTION', 'WBR']);
 
     const records = [];
     let truncated = false;
+    let timedOut = false;
+    let scanned = 0;
+    const PRIORITY = new Set(['hidden', 'iframe', 'redirect']);
+    let priorityCount = 0, normalCount = 0;
 
     function push(rec) {
-        if (records.length >= MAX_ELEMENTS) { truncated = true; return; }
+        if (PRIORITY.has(rec.type)) {
+            if (priorityCount >= MAX_RECORDS) { truncated = true; return; }
+            priorityCount++;
+        } else {
+            if (normalCount >= MAX_RECORDS) { truncated = true; return; }
+            normalCount++;
+        }
         records.push(rec);
     }
 
@@ -42,59 +59,108 @@ EXTRACT_JS = "(opts) => {" + CSS_SELECTOR_FN + r"""
         return s.length > MAX_TEXT ? s.slice(0, MAX_TEXT) + '…' : s;
     }
 
-    function rectOf(el) {
-        const r = el.getBoundingClientRect();
-        return { x: Math.round(r.left + window.scrollX), y: Math.round(r.top + window.scrollY),
+    const idCount = new Map();
+    for (const e of document.querySelectorAll('[id]')) idCount.set(e.id, (idCount.get(e.id) || 0) + 1);
+
+    const selectorCache = new Map();
+    function cssSelector(el) {
+        if (!el || el.nodeType !== 1) return '';
+        const cached = selectorCache.get(el);
+        if (cached !== undefined) return cached;
+        let sel;
+        if (el.id && idCount.get(el.id) === 1) {
+            sel = '#' + CSS.escape(el.id);
+        } else {
+            let part = el.tagName.toLowerCase();
+            const parent = el.parentElement;
+            if (!parent) {
+                sel = part;
+            } else {
+                let index = 1, count = 0;
+                for (const c of parent.children) {
+                    if (c.tagName === el.tagName) {
+                        count++;
+                        if (c === el) index = count;
+                    }
+                }
+                if (count > 1) part += ':nth-of-type(' + index + ')';
+                sel = cssSelector(parent) + ' > ' + part;
+            }
+        }
+        selectorCache.set(el, sel);
+        return sel;
+    }
+
+    const scrollX = window.scrollX, scrollY = window.scrollY;
+    const docW = Math.max(document.documentElement.scrollWidth, window.innerWidth);
+
+    function rectOf(r) {
+        return { x: Math.round(r.left + scrollX), y: Math.round(r.top + scrollY),
                  w: Math.round(r.width), h: Math.round(r.height) };
     }
 
     function ownText(el) {
         let s = '';
-        for (const n of el.childNodes) if (n.nodeType === 3) s += n.nodeValue;
+        for (let n = el.firstChild; n; n = n.nextSibling) if (n.nodeType === 3) s += n.nodeValue;
         return s.replace(/\s+/g, ' ').trim();
     }
 
+    const colorCache = new Map();
     function parseColor(c) {
+        if (colorCache.has(c)) return colorCache.get(c);
         const m = (c || '').match(/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,\s/]+([\d.]+%?))?/);
-        if (!m) return null;
-        let a = m[4] === undefined ? 1 : parseFloat(m[4]);
-        if (m[4] && m[4].endsWith('%')) a = a / 100;
-        return [parseFloat(m[1]), parseFloat(m[2]), parseFloat(m[3]), a];
-    }
-
-    function effectiveBackground(el) {
-        for (let cur = el; cur && cur.nodeType === 1; cur = cur.parentElement) {
-            const st = getComputedStyle(cur);
-            if (st.backgroundImage && st.backgroundImage !== 'none') return null;
-            const c = parseColor(st.backgroundColor);
-            if (c && c[3] > 0.1) return c;
+        let v = null;
+        if (m) {
+            let a = m[4] === undefined ? 1 : parseFloat(m[4]);
+            if (m[4] && m[4].endsWith('%')) a = a / 100;
+            v = [parseFloat(m[1]), parseFloat(m[2]), parseFloat(m[3]), a];
         }
-        return [255, 255, 255, 1];
+        colorCache.set(c, v);
+        return v;
     }
 
-    function hiddenReasons(el, st, hasOwnText) {
+    const styleCache = new Map();
+    function styleOf(el) {
+        let st = styleCache.get(el);
+        if (!st) { st = getComputedStyle(el); styleCache.set(el, st); }
+        return st;
+    }
+
+    const WHITE = [255, 255, 255, 1];
+    const bgCache = new Map();
+    function effectiveBackground(el) {
+        if (!el || el.nodeType !== 1) return WHITE;
+        if (bgCache.has(el)) return bgCache.get(el);
+        const st = styleOf(el);
+        let bg;
+        if (st.backgroundImage && st.backgroundImage !== 'none') {
+            bg = null;
+        } else {
+            const c = parseColor(st.backgroundColor);
+            bg = c && c[3] > 0.1 ? c : effectiveBackground(el.parentElement);
+        }
+        bgCache.set(el, bg);
+        return bg;
+    }
+
+    function hiddenReasons(el, st, r, hasOwnText) {
         const reasons = [];
-        if (st.display === 'none') reasons.push('display:none');
+        const none = st.display === 'none';
+        if (none) reasons.push('display:none');
         if (st.visibility === 'hidden' || st.visibility === 'collapse') reasons.push('visibility:hidden');
         if (parseFloat(st.opacity) <= 0.05) reasons.push('opacity:0');
-
         if (st.clip === 'rect(0px, 0px, 0px, 0px)' || /inset\(\s*(50|100)%/.test(st.clipPath))
             reasons.push('clip');
+        if (none) return reasons;
 
-        if (st.display !== 'none') {
-            const r = el.getBoundingClientRect();
-            const left = r.left + window.scrollX, top = r.top + window.scrollY;
-            const docW = Math.max(document.documentElement.scrollWidth, window.innerWidth);
-            if (r.width > 0 || r.height > 0) {
-                if (left + r.width <= 0 || top + r.height <= 0 || left >= docW + 100)
-                    reasons.push('off-screen');
-            }
-            if ((r.width <= 1 || r.height <= 1) && /hidden|clip/.test(st.overflow))
-                reasons.push('zero-size');
-            if (parseFloat(st.textIndent) <= -999) reasons.push('text-indent');
-        }
+        const left = r.left + scrollX, top = r.top + scrollY;
+        if ((r.width > 0 || r.height > 0) && (left + r.width <= 0 || top + r.height <= 0 || left >= docW + 100))
+            reasons.push('off-screen');
+        if ((r.width <= 1 || r.height <= 1) && /hidden|clip/.test(st.overflow))
+            reasons.push('zero-size');
+        if (parseFloat(st.textIndent) <= -999) reasons.push('text-indent');
 
-        if (hasOwnText && st.display !== 'none') {
+        if (hasOwnText) {
             if (parseFloat(st.fontSize) < 2) reasons.push('tiny-font');
             const fg = parseColor(st.color);
             if (fg && fg[3] <= 0.05) {
@@ -111,16 +177,18 @@ EXTRACT_JS = "(opts) => {" + CSS_SELECTOR_FN + r"""
     }
 
     function linksInside(el) {
-        return Array.from(el.querySelectorAll('a[href], area[href]')).slice(0, 20).map(a => a.href);
+        const out = [];
+        for (const a of el.querySelectorAll('a[href], area[href]')) {
+            out.push(a.href);
+            if (out.length >= 20) break;
+        }
+        return out;
     }
 
     const body = document.body;
-    if (!body) return { title: document.title || '', text: '', records: [], truncated: false };
-
-    const hiddenSet = new Set();
-    function insideHidden(el) {
-        for (let p = el; p; p = p.parentElement) if (hiddenSet.has(p)) return true;
-        return false;
+    if (!body) {
+        return { title: document.title || '', text: '', records: [], truncated: false,
+                 timed_out: false, scanned: 0, total_elements: 0, elapsed_ms: 0 };
     }
 
     for (const m of document.querySelectorAll('meta[http-equiv]')) {
@@ -129,60 +197,114 @@ EXTRACT_JS = "(opts) => {" + CSS_SELECTOR_FN + r"""
         }
     }
 
-    for (const el of body.querySelectorAll('*')) {
-        if (SKIP_TAGS.has(el.tagName.toUpperCase())) continue;
-        if (el.closest('svg') && el.tagName.toLowerCase() !== 'svg') continue;
+    const hiddenOf = new Map();
+    function isHidden(el) {
+        if (!el || el === body) return false;
+        const v = hiddenOf.get(el);
+        if (v !== undefined) return v;
+        const h = isHidden(el.parentElement);
+        hiddenOf.set(el, h);
+        return h;
+    }
 
-        const st = getComputedStyle(el);
-        const text = ownText(el);
-        const parentHidden = insideHidden(el.parentElement);
+    const all = body.getElementsByTagName('*');
+    const total = all.length;
 
-        if (!parentHidden) {
-            const reasons = hiddenReasons(el, st, text.length > 0);
-            if (reasons.length > 0) {
-                hiddenSet.add(el);
-                const content = clip(el.textContent);
-                const links = linksInside(el);
-                if (el.matches('a[href], area[href]')) links.unshift(el.href);
-                if (content || links.length || el.querySelector('iframe, img')) {
-                    push({ type: 'hidden', tag: el.tagName.toLowerCase(), selector: cssSelector(el),
-                           content, hidden_reasons: reasons, links, rect: rectOf(el) });
-                }
+    for (let i = 0; i < total; i++) {
+        if (i >= MAX_SCAN) { truncated = true; break; }
+        if ((i & 127) === 0 && performance.now() - t0 > TIME_BUDGET) { timedOut = true; break; }
+        const el = all[i];
+        scanned++;
+
+        const tag = el.tagName.toUpperCase();
+        if (SKIP_TAGS.has(tag)) continue;
+        if (el instanceof SVGElement && tag !== 'SVG') { hiddenOf.set(el, isHidden(el.parentElement)); continue; }
+
+        const parentHidden = isHidden(el.parentElement);
+        const text = parentHidden ? '' : ownText(el);
+        const isLink = tag === 'A' || tag === 'AREA' ? el.hasAttribute('href') : false;
+        const isFrame = tag === 'IFRAME' || tag === 'FRAME';
+
+        if (parentHidden) {
+            hiddenOf.set(el, true);
+            if (isLink) {
+                push({ type: 'link', selector: cssSelector(el), href: el.href,
+                       raw_href: el.getAttribute('href'), content: clip(el.textContent || el.title || ''),
+                       target: el.getAttribute('target') || '', hidden: true, rect: null });
+            }
+            if (isFrame) {
+                push({ type: 'iframe', selector: cssSelector(el), src: el.src || '',
+                       raw_src: el.getAttribute('src') || '', content: clip(el.title || el.name || ''),
+                       hidden: true, hidden_reasons: ['inside-hidden-element'], rect: null });
+            }
+            continue;
+        }
+
+        const needsStyle = text.length > 0 || el.firstElementChild || isLink || isFrame || tag === 'IMG';
+        if (!needsStyle) { hiddenOf.set(el, false); continue; }
+
+        const st = styleOf(el);
+        const r = el.getBoundingClientRect();
+        const reasons = hiddenReasons(el, st, r, text.length > 0);
+        const selfHidden = reasons.length > 0;
+        hiddenOf.set(el, selfHidden);
+
+        if (selfHidden) {
+            const content = clip(el.textContent);
+            const links = linksInside(el);
+            if (isLink) links.unshift(el.href);
+            if (content || links.length || el.querySelector('iframe, img')) {
+                push({ type: 'hidden', tag: tag.toLowerCase(), selector: cssSelector(el),
+                       content, hidden_reasons: reasons, links, rect: rectOf(r) });
             }
         }
-        const hidden = parentHidden || hiddenSet.has(el);
 
-        if (el.matches('a[href], area[href]')) {
-            const label = clip(el.innerText || el.textContent || el.title ||
-                               (el.querySelector('img') && el.querySelector('img').alt) || '');
+        if (isLink) {
+            let label = el.textContent || el.title || '';
+            if (!label.trim()) {
+                const img = el.querySelector('img');
+                label = img ? img.alt : '';
+            }
             push({ type: 'link', selector: cssSelector(el), href: el.href,
-                   raw_href: el.getAttribute('href'), content: label,
-                   target: el.getAttribute('target') || '', hidden, rect: rectOf(el) });
+                   raw_href: el.getAttribute('href'), content: clip(label),
+                   target: el.getAttribute('target') || '', hidden: selfHidden, rect: rectOf(r) });
         }
 
-        if (el.tagName === 'IFRAME' || el.tagName === 'FRAME') {
-            const r = el.getBoundingClientRect();
-            const reasons = hidden ? ['inside-hidden-element'] : [];
-            if (st.display !== 'none' && (r.width <= 2 || r.height <= 2)) reasons.push('tiny-size');
+        if (isFrame) {
+            const fr = selfHidden ? reasons.slice() : [];
+            if (st.display !== 'none' && (r.width <= 2 || r.height <= 2)) fr.push('tiny-size');
             push({ type: 'iframe', selector: cssSelector(el), src: el.src || '',
-                   raw_src: el.getAttribute('src') || '',
-                   content: clip(el.title || el.name || ''),
-                   hidden: hidden || reasons.length > 0, hidden_reasons: reasons, rect: rectOf(el) });
+                   raw_src: el.getAttribute('src') || '', content: clip(el.title || el.name || ''),
+                   hidden: fr.length > 0, hidden_reasons: fr, rect: rectOf(r) });
         }
 
-        if (!hidden && text.length >= 2) {
-            const full = (el.innerText || '').replace(/\s+/g, ' ').trim();
-            const content = full.length > 0 && full.length <= MAX_TEXT * 2 ? clip(full) : clip(text);
-            push({ type: 'text', tag: el.tagName.toLowerCase(), selector: cssSelector(el),
-                   content, rect: rectOf(el) });
+        if (!selfHidden && text.length >= 2) {
+            let content = clip(text);
+            if (el.childElementCount > 0 && el.childElementCount <= 10) {
+                const full = el.textContent;
+                if (full.length <= MAX_TEXT * 2) content = clip(el.innerText || full);
+            }
+            push({ type: 'text', tag: tag.toLowerCase(), selector: cssSelector(el),
+                   content, rect: rectOf(r) });
         }
+    }
+
+    let pageText = '';
+    if (performance.now() - t0 <= TIME_BUDGET) {
+        pageText = (body.innerText || '');
+    } else {
+        pageText = (body.textContent || '');
     }
 
     return {
         title: document.title || '',
-        text: (body.innerText || '').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim().slice(0, 50000),
+        text: pageText.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim().slice(0, 50000),
         records,
         truncated,
+        timed_out: timedOut,
+        scanned,
+        total_elements: total,
+        elapsed_ms: Math.round(performance.now() - t0),
     };
 }
 """

@@ -37,7 +37,9 @@ ad-sentinel/
 ├── tests/
 │   ├── fixtures/site/         # 불법광고가 숨겨진 샘플 사이트 (테스트·시연용)
 │   ├── test_url_utils.py
-│   └── test_crawler.py
+│   ├── fixtures/heavy/        # 요소 1만 개 이상 페이지, 응답 없는 iframe (성능·제한 시간 테스트)
+│   ├── test_crawler.py
+│   └── test_heavy.py
 ├── packaging/                 # [4단계] PyInstaller 설정 (예정)
 └── docs/                      # [5단계] 매뉴얼·사용설명서·기획서 (예정)
 ```
@@ -53,10 +55,36 @@ playwright install chromium       # 생략 시 Windows 기본 Edge를 자동 사
 python main.py https://www.example.go.kr --max-pages 20
 ```
 
-주요 옵션: `--max-pages`, `--depth`, `--delay`, `--out`, `--same-host-only`,
+주요 옵션: `--max-pages`, `--depth`, `--delay`, `--page-timeout`, `--out`, `--same-host-only`,
 `--ignore-robots`, `--show-browser`, `--browser <브라우저 경로>`
 
 결과는 `output/crawl_날짜_시간.json`에 저장됩니다.
+
+### 제한 시간·상한 (`ad_sentinel/config.py`)
+
+| 설정 | 기본값 | 설명 |
+|---|---|---|
+| `page_timeout_ms` | 20000 | 페이지 로딩(`goto`) 제한 시간 |
+| `page_total_timeout_sec` | 60 | 페이지 하나의 전체 제한 시간. 넘으면 남은 프레임을 건너뛰고 다음 페이지로 |
+| `networkidle_timeout_ms` | 5000 | 네트워크가 잠잠해질 때까지 기다리는 최대 시간 |
+| `render_wait_ms` | 1500 | 스크롤 후 동적 콘텐츠 대기 시간 |
+| `frame_eval_timeout_ms` | 15000 | 메인 문서 추출 제한 시간 |
+| `iframe_eval_timeout_ms` | 5000 | iframe 하나의 추출 제한 시간 (응답 없는 iframe은 이 시간 후 건너뜀) |
+| `extract_time_budget_ms` | 10000 | 추출 스크립트가 브라우저 안에서 쓰는 최대 시간. 넘으면 검사한 부분까지만 돌려줌 |
+| `max_frames_per_page` | 20 | 페이지당 추출할 최대 프레임 수 |
+| `max_scan_elements` | 20000 | 프레임당 검사할 최대 요소 수 |
+| `max_elements_per_frame` | 3000 | 프레임당 텍스트·링크 레코드 상한 (숨김·iframe 레코드는 별도로 3000개까지 유지) |
+
+실행 중 로그에 단계별 소요 시간이 표시됩니다.
+
+```
+[1/10] https://www.example.go.kr/
+  로딩 0.84s (HTTP 200)
+  렌더링 대기·스크롤 1.59s
+  프레임 1/3 메인 1.51s (스크립트 0.46s) 요소 14429개 중 14429개 검사, 레코드 3401개
+  프레임 2/3 iframe  → 건너뜀: 추출 시간 초과 (5.0s)
+  페이지 완료 9.58s (프레임 3개, 레코드 3420개)
+```
 
 ## 테스트
 
@@ -65,6 +93,7 @@ python -m pytest
 ```
 
 `test_crawler.py`는 `tests/fixtures/site`를 로컬 서버로 띄워 실제 브라우저로 크롤링합니다.
+`test_heavy.py`는 요소가 1만 개 넘는 페이지와 응답 없는 iframe에서 제한 시간 안에 끝나는지 검증합니다.
 
 ## 크롤링 결과 JSON 형식
 
@@ -75,10 +104,12 @@ python -m pytest
   "pages": [
     {
       "url": "http://.../index.html", "final_url": "...", "status": 200, "title": "...",
-      "depth": 0, "found_on": "", "error": null,
+      "depth": 0, "found_on": "", "error": null, "timed_out": false,
+      "timings": { "load": 0.84, "render": 1.59, "extract": 1.51, "total": 4.25 },
       "offsite_redirect": false,               // 다른 사이트로 강제 이동되었는지
       "frames": [                              // 메인 문서 + 모든 iframe 문서
-        { "frame_url": "...", "frame_path": [], "is_main": true, "title": "...", "text": "페이지 전체 텍스트" }
+        { "frame_url": "...", "frame_path": [], "is_main": true, "title": "...", "text": "페이지 전체 텍스트",
+          "total_elements": 14429, "scanned": 14429, "elapsed_ms": 1510, "truncated": false, "timed_out": false, "error": null }
       ],
       "elements": [
         { "type": "hidden", "selector": "#content > div:nth-of-type(1)", "content": "온라인 카지노 바로가기",

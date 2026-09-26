@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="utf-8"><title>대형 포털</title>
+<style>
+  .sec { background: #f4f4f4; padding: 2px; }
+  .sec li { color: #333; font-size: 12px; }
+  .menu { display: none; }
+</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script>
+    var root = document.getElementById('root');
+    for (var d = 0; d < 25; d++) {
+      var w = document.createElement('div');
+      w.className = 'wrap wrap' + d;
+      root.appendChild(w);
+      root = w;
+    }
+    var html = [];
+    for (var s = 0; s < 400; s++) {
+      html.push('<section class="sec" id="sec' + s + '"><h3>게시판 ' + s + '</h3><ul>');
+      for (var i = 0; i < 10; i++) {
+        html.push('<li><a href="list.html?bbs=' + s + '&amp;n=' + i + '">공지 제목 ' + s + '-' + i +
+                  '</a> <span>2026-09-' + (i + 10) + '</span></li>');
+      }
+      html.push('</ul><ul class="menu"><li><a href="#">하위 메뉴</a></li></ul></section>');
+    }
+    html.push('<div class="footer-ad" style="position:absolute;left:-5000px">' +
+              '<a href="http://casino.invalid/">카지노 먹튀검증</a></div>');
+    root.innerHTML = html.join('');
+  </script>
+</body>
+</html>
