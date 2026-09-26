@@ -111,27 +111,51 @@ FIND_GATE_JS = r"""
 FIND_MORE_JS = r"""
 (opts) => {
 """ + DANGER_CHECK_JS + r"""
-    const MORE = /^\+?\s*(클릭\s*(하여|해서)\s*)?(글\s*)?(더\s*보기|더\s*불러오기|더\s*읽기|게시글\s*더\s*보기)(\s*[+▼⌄∨v>]*)?\s*(\(\d+\))?$|^(load|show|view|see)\s+more(\s+posts?)?$|^more$/i;
+    const MORE = /^\+?\s*(클릭\s*(하여|해서)\s*)?(글\s*|게시글\s*|게시물\s*)?(더\s*보기|더\s*불러오기|더\s*읽기)(\s*[+▼⌄∨v>]*)?\s*(\(\d+\))?$|^(load|show|view|see)\s+more(\s+posts?)?$|^more$/i;
+    const norm = s => s.replace(/\s+/g, '');
     for (const old of document.querySelectorAll('[data-ad-sentinel-more]')) old.removeAttribute('data-ad-sentinel-more');
-    const candidates = document.querySelectorAll('a, button, [role=button], [onclick], div, span, li, p');
-    let best = null;
-    for (const el of candidates) {
+
+    function nearMedia(el) {
+        let cur = el;
+        for (let i = 0; i < 3 && cur; i++, cur = cur.parentElement) {
+            if (cur.querySelector && cur.querySelector('img, video, canvas, picture')) return true;
+            if (/blur/.test(getComputedStyle(cur).filter)) return true;
+        }
+        return false;
+    }
+
+    const matches = [];
+    for (const el of document.querySelectorAll('a, button, [role=button], [onclick], div, span, li, p')) {
         const label = labelOf(el);
         if (!label || label.length > 20 || !MORE.test(label)) continue;
         if (el.querySelector('a, button, [role=button], [onclick]') && !el.matches('a, button, [role=button], [onclick]'))
             continue;
-        if (isDanger(el, label)) continue;
+        matches.push({ el, label });
+    }
+    const outer = matches.filter(m => !matches.some(o => o.el !== m.el && o.el.contains(m.el)));
+    matches.length = 0;
+    matches.push(...outer);
+    const counts = {};
+    for (const m of matches) counts[norm(m.label)] = (counts[norm(m.label)] || 0) + 1;
+
+    let best = null, reveal = 0;
+    for (const m of matches) {
+        const el = m.el;
+        if (isDanger(el, m.label)) continue;
         const href = (el.getAttribute('href') || '').trim();
         if (href && !href.startsWith('#') && !/^javascript:/i.test(href)) continue;
-        const area = visibleArea(el);
-        if (!area) continue;
-        const r = el.getBoundingClientRect();
-        const y = r.top + window.scrollY;
-        if (!best || y > best.y) best = { el, label, y };
+        const pos = getComputedStyle(el).position;
+        if (counts[norm(m.label)] >= 2 || ((pos === 'absolute' || pos === 'fixed') && nearMedia(el))) {
+            reveal++;
+            continue;
+        }
+        if (!visibleArea(el)) continue;
+        const y = el.getBoundingClientRect().top + window.scrollY;
+        if (!best || y > best.y) best = { el, label: m.label, y };
     }
-    if (!best) return null;
+    if (!best) return { found: false, reveal };
     best.el.setAttribute('data-ad-sentinel-more', '1');
-    return { text: best.label };
+    return { found: true, text: best.label, reveal };
 }
 """
 
@@ -140,7 +164,10 @@ PAGE_METRICS_JS = r"""
     const text = document.body ? (document.body.innerText || '').replace(/\s+/g, '') : '';
     let hash = 0;
     for (let i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) | 0;
+    const loading = text.length < 400 &&
+        /로딩|로드중|다운로드중|불러오는중|준비중|잠시만|loading|pleasewait/i.test(text);
     return {
+        loading,
         text: text.length,
         hash,
         nodes: document.body ? document.body.getElementsByTagName('*').length : 0,
@@ -171,6 +198,13 @@ def is_boilerplate_link(record: dict) -> bool:
     if record.get("footer") or (record.get("raw_href") or "").strip().startswith("#"):
         return True
     return bool(BOILERPLATE_LINK.search(record.get("content") or ""))
+
+
+def content_grew(before: dict, after: dict) -> bool:
+    if after.get("hash") == before.get("hash"):
+        return False
+    return (after["text"] - before["text"] >= 30 or after["nodes"] - before["nodes"] >= 5
+            or after.get("height", 0) - before.get("height", 0) >= 100)
 
 
 def content_changed(before: dict, after: dict) -> bool:

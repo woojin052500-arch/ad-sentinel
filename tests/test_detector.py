@@ -194,3 +194,9 @@ def test_text_inside_tiny_iframe_counts_as_hidden():
     f = result["findings"][0]
     assert f["level"] == HIGH
     assert any(e["label"] == "숨겨진 iframe 내부" for e in f["evidence"])
+
+
+def test_wonjo_gyoje_is_adult_keyword_but_single_keyword_is_not_ad():
+    assert [k.word for k in find_keywords("양파 원조교제하다")] == ["원조교제"]
+    assert _score(_rec("text", "양파 원조교제하다")) is None
+    assert _score(_rec("text", "원조교제 조건만남 텔레그램 @abc123"))["level"] == HIGH

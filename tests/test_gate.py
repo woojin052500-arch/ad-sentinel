@@ -219,6 +219,7 @@ def test_feed_gate_with_anchor_menu_and_javascript_button(feed_run):
     assert gate["text"] == "지금, 익명으로 시작하기 >"
     assert gate["url_changed"] is False and first["final_url"].endswith("/?sec=hero")
     assert gate["text_after"] > gate["text_before"]
+    assert "스타일시트 다운로드 중" not in " ".join(e["content"] for e in first["elements"] if e["type"] == "text")
     assert crawl["meta"]["notes"] == []
     assert "/clicked/start" in requests
 
@@ -226,10 +227,12 @@ def test_feed_gate_with_anchor_menu_and_javascript_button(feed_run):
 def test_feed_load_more_collects_later_posts(feed_run):
     crawl, requests = feed_run
     first = crawl["pages"][0]
+    assert first["gate"]["load_more_scrolls"] == 3
     assert first["gate"]["load_more_clicks"] == 2
     assert requests.count("/clicked/more") == 2
+    assert "/clicked/reveal" not in requests
     texts = " ".join(e["content"] for e in first["elements"] if e["type"] == "text")
-    assert "익명 15번째 생각" in texts
+    assert "익명 30번째 생각" in texts
     report = detect(crawl)
     contents = {f["content"] for f in report["findings"]}
     assert any("토토사이트 추천" in c for c in contents)
@@ -239,8 +242,9 @@ def test_feed_load_more_collects_later_posts(feed_run):
 def test_feed_consent_and_join_popups_are_not_clicked(feed_run):
     crawl, requests = feed_run
     assert "/clicked/agree" not in requests and "/clicked/discord" not in requests
+    assert "/clicked/later" not in requests
     texts = " ".join(e["content"] for e in crawl["pages"][0]["elements"] if e["type"] == "text")
-    assert "약관에 동의하셔야" in texts
+    assert "약관에 동의하는 것으로 간주됩니다" in texts and "양파 원조교제하다" in texts
 
 
 def test_feed_without_gate_warns_board_missing():

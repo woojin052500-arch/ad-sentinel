@@ -15,7 +15,7 @@ from ad_sentinel.crawler import sitemap
 from ad_sentinel.crawler.extract_js import EXTRACT_JS, FRAME_ELEMENT_JS
 from ad_sentinel.crawler.gate import (DANGER_WORDS, FIND_GATE_JS, FIND_MORE_JS, FOOTER_SELECTOR, GATE_PARTS,
                                       GATE_WORDS, JS_CLICK, MAX_GATE_CANDIDATES, PAGE_METRICS_JS, STRONG_GATE_WORDS,
-                                      content_changed, is_boilerplate_link)
+                                      content_changed, content_grew, is_boilerplate_link)
 from ad_sentinel.crawler.robots import RobotsChecker
 from ad_sentinel.crawler.url_utils import is_crawlable, is_safe_to_visit, is_same_site, normalize_url
 from ad_sentinel.paths import setup_bundled_browser
@@ -262,23 +262,29 @@ class Crawler:
         except PlaywrightError:
             return None
 
-    def _wait_for_change(self, page: Page, before: dict, limit_ms: int) -> dict | None:
+    def _wait_for_change(self, page: Page, before: dict, limit_ms: int, test=content_changed) -> dict | None:
         end = time.monotonic() + limit_ms / 1000
-        last, stable = None, 0
+        last, stable, saw_loading = None, 0, False
         while time.monotonic() < end:
             page.wait_for_timeout(300)
             now = self._metrics(page, int((end - time.monotonic()) * 1000))
             if not now:
                 continue
-            if content_changed(before, now):
+            if now.get("loading"):
+                if not saw_loading:
+                    log.info("  로딩 화면 대기 중...")
+                saw_loading, stable = True, 0
+            elif test(before, now):
                 if last and abs(now["text"] - last["text"]) < 20 and abs(now["nodes"] - last["nodes"]) < 5:
                     stable += 1
-                    if stable >= 2:
+                    if stable >= 3:
                         return now
                 else:
                     stable = 0
             last = now
-        return last if last and content_changed(before, last) else None
+        if last and not last.get("loading") and test(before, last):
+            return last
+        return None
 
     def _click(self, page: Page, selector: str, timeout_ms: int) -> bool:
         try:
@@ -382,7 +388,7 @@ class Crawler:
         stop_at = time.monotonic() + cfg.load_more_timeout_sec
         start_url = page.url
         options = {"dangerWords": DANGER_WORDS}
-        clicks, scrolls = 0, 0
+        clicks, scrolls, misses, reveal = 0, 0, 0, 0
         first_metrics = self._metrics(page, remaining_ms())
         if not first_metrics:
             return
@@ -396,7 +402,8 @@ class Crawler:
                 more = self._evaluate(page.main_frame, FIND_MORE_JS, options, min(5000, remaining_ms()))
             except PlaywrightError:
                 more = None
-            if more:
+            reveal = max(reveal, (more or {}).get("reveal", 0))
+            if more and more.get("found"):
                 if not self._click_js(page, "[data-ad-sentinel-more='1']", remaining_ms()):
                     break
                 action = "click"
@@ -408,28 +415,35 @@ class Crawler:
                     break
                 action = "scroll"
             wait = min(5000, max(0, int((stop_at - time.monotonic()) * 1000)))
-            after = self._wait_for_change(page, before, wait)
+            after = self._wait_for_change(page, before, wait, test=content_grew)
             if normalize_url(page.url) != normalize_url(start_url):
                 log.info("  더보기 중 주소가 바뀌어 멈춤: %s", page.url)
                 break
             if not after:
-                break
+                misses += 1
+                if misses >= 2:
+                    break
+                continue
+            misses = 0
             if action == "click":
                 clicks += 1
             else:
                 scrolls += 1
-            log.info("  더보기 %s %d회: 화면 글자 %d자", "클릭" if action == "click" else "스크롤",
-                     clicks if action == "click" else scrolls, after["text"])
+            log.info("  %s: 화면 글자 %d자", f"더보기 클릭 {clicks}회" if action == "click" else f"스크롤 로딩 {scrolls}회",
+                     after["text"])
 
+        if reveal:
+            log.info("  이미지 보기·펼치기용 '더보기' %d개는 누르지 않음 (게시글 추가 로딩 버튼이 아님)", reveal)
         if clicks or scrolls:
             last = self._metrics(page, remaining_ms()) or first_metrics
             self._reextract(page, page_result, remaining_ms)
             page_result["gate"]["load_more_clicks"] = clicks
             page_result["gate"]["load_more_scrolls"] = scrolls
-            what = f"더보기 {clicks}회 클릭" if clicks else f"스크롤 {scrolls}회"
-            if clicks and scrolls:
-                what += f"·스크롤 {scrolls}회"
-            notice.info("%s, 게시글 영역 추가 수집 (화면 글자 %d자 → %d자)", what, first_metrics["text"], last["text"])
+            parts = [f"더보기 {clicks}회 클릭"] if clicks else []
+            if scrolls:
+                parts.append(f"스크롤 추가 로딩 {scrolls}회")
+            notice.info("%s, 게시글 영역 추가 수집 (화면 글자 %d자 → %d자)", "·".join(parts),
+                        first_metrics["text"], last["text"])
 
     def _click_js(self, page: Page, selector: str, timeout_ms: int) -> bool:
         try:

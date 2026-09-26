@@ -64,6 +64,7 @@ KEYWORDS = [
     _kw("야동", ADULT, STRONG),
     _kw("성인방송", ADULT, STRONG),
     _kw("조건만남", ADULT, STRONG),
+    _kw("원조교제", ADULT, STRONG),
     _kw("출장안마", ADULT, STRONG),
     _kw("출장마사지", ADULT, STRONG),
     _kw("섹스", ADULT, STRONG),

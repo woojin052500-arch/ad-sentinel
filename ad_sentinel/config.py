@@ -26,7 +26,7 @@ class CrawlConfig:
     delay_sec: float = 0.5
     enter_gate: bool = True
     gate_link_threshold: int = 3
-    gate_wait_ms: int = 10000
+    gate_wait_ms: int = 20000
     load_more: bool = True
     load_more_max_clicks: int = 30
     load_more_timeout_sec: float = 90.0
