@@ -124,3 +124,49 @@ def test_gate_option_and_notices(app):
     report["meta"]["notes"] = ["발견한 링크가 적어 2페이지만 점검했습니다. 입장 버튼이 있는 사이트라면 입장 후 주소를 시작 주소로 넣어보세요."]
     app._show_report(crawl, report)
     assert "발견한 링크가 적어 2페이지만" in app.detail.get("1.0", "end")
+
+
+def test_help_icons_tooltips_and_quick_start(app):
+    from ad_sentinel.help_texts import SETTINGS
+
+    assert set(SETTINGS) <= set(app.help_icons)
+    assert "unchecked" in app.help_icons
+    assert app.help_icons["page_timeout"].text().startswith("무엇인가요: 한 페이지를")
+    assert "3단계 사용법" in app.detail.get("1.0", "end") and "결과 확인" in app.detail.get("1.0", "end")
+
+    app.max_pages.set(100)
+    app.update_idletasks()
+    assert app.estimate.get() == "(예상 약 8분)"
+
+    icon = app.help_icons["delay"]
+    icon.tooltip.show(("요청 간격", icon.text()))
+    assert icon.tooltip.window is not None
+    icon.tooltip.hide()
+    assert icon.tooltip.window is None
+
+    app.update()
+    heading_x = app.table.bbox(app.table.get_children()[0])[0] if app.table.get_children() else 10
+
+    class Event:
+        x, y = heading_x + 5, 5
+
+    title, body = app._heading_help(Event())
+    assert title == "판정" and "불법광고 의심" in body
+    assert app.table.heading("score")["text"] == "점수 ?"
+
+    app._show_help_window()
+    assert "페이지당 제한 시간" in app.help_text.get("1.0", "end") and "점검하지 못한 영역" in app.help_text.get("1.0", "end")
+    app.help_window.destroy()
+
+
+def test_unchecked_explanation(app):
+    import json
+
+    crawl = json.loads((Path(__file__).parent / "fixtures" / "mois_sample.json").read_text(encoding="utf-8"))
+    report = detect(crawl)
+    app._show_report(crawl, report)
+    assert report.get("unchecked")
+    assert app.unchecked_help.winfo_manager() == "pack"
+    app._show_unchecked()
+    text = app.detail.get("1.0", "end")
+    assert "왜 확인해야 하나요" in text and "숨겨진 iframe" in text

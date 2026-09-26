@@ -13,6 +13,9 @@ from ad_sentinel.config import OWN_SITE_LABEL, ROBOTS_IGNORE_WARNING, CrawlConfi
 from ad_sentinel.crawler import Crawler
 from ad_sentinel.detector import detect
 from ad_sentinel.detector.domains import DEFAULT_WHITELIST, read_user_whitelist, save_user_whitelist
+from ad_sentinel.gui.tooltip import HelpIcon, Tooltip, help_content
+from ad_sentinel.help_texts import (COLUMNS, QUICK_START, QUICK_START_FOOTER, QUICK_START_TITLE, SETTINGS,
+                                    UNCHECKED, estimate_text, quick_start_text)
 from ad_sentinel.paths import asset_path, output_dir
 from ad_sentinel.report import (display_url, export_csv, export_html, export_json, location_text,
                                 reflected_text, stats_lines)
@@ -79,10 +82,14 @@ class App(tk.Tk):
         self.count_text = tk.StringVar(value="")
         self.summary = tk.StringVar(value="")
         self.unchecked_text = tk.StringVar(value="")
+        self.estimate = tk.StringVar(value="")
+        self.help_icons: dict[str, HelpIcon] = {}
 
         self._build()
         self._on_mode_change()
-        self._show_guide("점검을 시작하면 결과가 여기에 표시됩니다.")
+        self.max_pages.trace_add("write", lambda *_: self._update_estimate())
+        self._update_estimate()
+        self._show_quick_start()
 
         self.log_handler = QueueLogHandler(self.events)
         logging.getLogger("ad_sentinel").addHandler(self.log_handler)
@@ -108,9 +115,18 @@ class App(tk.Tk):
         mode_box = ttk.LabelFrame(root, text="1. 점검 방식", padding=pad)
         mode_box.pack(fill="x")
         ttk.Radiobutton(mode_box, text="사이트 점검 - 시작 주소에서 링크를 따라가며 하위 페이지를 점검",
-                        variable=self.mode, value=SITE, command=self._on_mode_change).pack(anchor="w")
+                        variable=self.mode, value=SITE, command=self._on_mode_change).grid(row=0, column=0, sticky="w")
         ttk.Radiobutton(mode_box, text="URL 목록 점검 - 주소 목록 파일(서치 콘솔에서 내보낸 파일 등)에 있는 주소만 점검",
-                        variable=self.mode, value=LIST, command=self._on_mode_change).pack(anchor="w")
+                        variable=self.mode, value=LIST, command=self._on_mode_change).grid(row=1, column=0, sticky="w")
+        intro = ttk.Frame(mode_box)
+        intro.grid(row=0, column=1, rowspan=2, sticky="e")
+        intro_top = ttk.Frame(intro)
+        intro_top.pack(anchor="e")
+        ttk.Label(intro_top, text="처음 사용하시나요?", font=_bold_font()).pack(side="left", padx=(0, pad))
+        ttk.Button(intro_top, text="3단계 사용법", command=self._show_quick_start_dialog).pack(side="left")
+        ttk.Button(intro_top, text="설정·결과 설명", command=self._show_help_window).pack(side="left", padx=(pad, 0))
+        ttk.Label(intro, text="설정 옆 ? 에 마우스를 올리면 설명이 나옵니다.", foreground=HINT_COLOR).pack(anchor="e")
+        mode_box.columnconfigure(1, weight=1)
 
         target = ttk.LabelFrame(root, text="2. 점검 대상", padding=pad)
         target.pack(fill="x", pady=(pad, 0))
@@ -125,16 +141,23 @@ class App(tk.Tk):
         options = ttk.Frame(self.site_frame)
         options.grid(row=2, column=0, columnspan=2, sticky="w", pady=(pad, 0))
         ttk.Label(options, text="최대 페이지 수").pack(side="left")
+        self._help(options, "max_pages").pack(side="left", padx=(pad // 2, 0))
         ttk.Spinbox(options, from_=1, to=5000, textvariable=self.max_pages, width=6).pack(side="left", padx=pad)
-        ttk.Label(options, text="링크 깊이").pack(side="left", padx=(pad * 2, 0))
+        ttk.Label(options, textvariable=self.estimate, foreground=HINT_COLOR).pack(side="left")
+        ttk.Label(options, text="링크 깊이").pack(side="left", padx=(pad * 3, 0))
+        self._help(options, "max_depth").pack(side="left", padx=(pad // 2, 0))
         ttk.Spinbox(options, from_=0, to=10, textvariable=self.max_depth, width=4).pack(side="left", padx=pad)
-        ttk.Label(options, text="(시작 주소에서 링크를 몇 번까지 따라갈지)", foreground=HINT_COLOR).pack(side="left")
-        ttk.Checkbutton(self.site_frame, variable=self.enter_gate,
+        ttk.Label(options, text="(첫 화면 → 게시판 → 게시글 = 2단계)", foreground=HINT_COLOR).pack(side="left")
+        gate_row = ttk.Frame(self.site_frame)
+        gate_row.grid(row=3, column=0, columnspan=2, sticky="w", pady=(pad, 0))
+        ttk.Checkbutton(gate_row, variable=self.enter_gate,
                         text="첫 화면의 '입장' 버튼 자동 클릭 (입장해야 본 화면이 나오는 사이트용, "
-                             "로그인·가입·결제·삭제·신고 버튼은 누르지 않음)").grid(
-            row=3, column=0, columnspan=2, sticky="w", pady=(pad, 0))
-        ttk.Label(self.site_frame, text="sitemap 또는 RSS 주소 (선택)").grid(
-            row=4, column=0, sticky="w", padx=(0, pad), pady=(pad, 0))
+                             "로그인·가입·결제·삭제·신고 버튼은 누르지 않음)").pack(side="left")
+        self._help(gate_row, "enter_gate").pack(side="left", padx=(pad // 2, 0))
+        sitemap_label = ttk.Frame(self.site_frame)
+        sitemap_label.grid(row=4, column=0, sticky="w", padx=(0, pad), pady=(pad, 0))
+        ttk.Label(sitemap_label, text="sitemap 또는 RSS 주소 (선택)").pack(side="left")
+        self._help(sitemap_label, "sitemap").pack(side="left", padx=(pad // 2, 0))
         ttk.Entry(self.site_frame, textvariable=self.sitemap_url).grid(row=4, column=1, sticky="we", pady=(pad, 0))
         ttk.Label(self.site_frame, foreground=HINT_COLOR,
                   text="예: https://www.example.go.kr/all/sitemap.xml · 비워 두면 robots.txt와 흔한 위치"
@@ -151,24 +174,29 @@ class App(tk.Tk):
             row=1, column=0, columnspan=2, sticky="w", pady=(pad, 0))
         self.list_frame.columnconfigure(1, weight=1)
 
-        bottom_row = ttk.Frame(target)
-        bottom_row.pack(fill="x", side="bottom", pady=(pad, 0))
+        bottom = ttk.Frame(target)
+        bottom.pack(fill="x", side="bottom", pady=(pad, 0))
+        bottom_row = ttk.Frame(bottom)
+        bottom_row.pack(fill="x")
         ttk.Checkbutton(bottom_row, text=OWN_SITE_LABEL, variable=self.own_site,
                         command=self._on_own_site).pack(side="left")
+        self._help(bottom_row, "own_site").pack(side="left", padx=(pad // 2, 0))
         ttk.Checkbutton(bottom_row, text="고급 설정", variable=self.show_advanced,
                         command=self._toggle_advanced).pack(side="left", padx=(pad * 4, pad))
-        self.advanced_frame = ttk.Frame(bottom_row)
+        self.advanced_frame = ttk.Frame(bottom)
         ttk.Label(self.advanced_frame, text="요청 간격").pack(side="left")
+        self._help(self.advanced_frame, "delay").pack(side="left", padx=(pad // 2, 0))
         ttk.Spinbox(self.advanced_frame, from_=0, to=30, increment=0.5, textvariable=self.delay_sec,
                     width=5).pack(side="left", padx=pad)
-        ttk.Label(self.advanced_frame, text="초").pack(side="left")
-        ttk.Label(self.advanced_frame, text="페이지당 제한 시간").pack(side="left", padx=(pad * 3, 0))
+        ttk.Label(self.advanced_frame, text="초 (차단되면 자동으로 늘림)").pack(side="left")
+        ttk.Label(self.advanced_frame, text="페이지당 제한 시간").pack(side="left", padx=(pad * 4, 0))
+        self._help(self.advanced_frame, "page_timeout").pack(side="left", padx=(pad // 2, 0))
         ttk.Spinbox(self.advanced_frame, from_=10, to=600, increment=10, textvariable=self.page_timeout,
                     width=5).pack(side="left", padx=pad)
         ttk.Label(self.advanced_frame, text="초").pack(side="left")
-        ttk.Label(self.advanced_frame, foreground=HINT_COLOR, text="  (차단되면 간격을 자동으로 늘림)").pack(side="left")
         ttk.Checkbutton(self.advanced_frame, text="브라우저 창 보이기(진단용)",
-                        variable=self.show_browser).pack(side="left", padx=(pad * 3, 0))
+                        variable=self.show_browser).pack(side="left", padx=(pad * 4, 0))
+        self._help(self.advanced_frame, "show_browser").pack(side="left", padx=(pad // 2, 0))
 
         buttons = ttk.Frame(root)
         buttons.pack(fill="x", pady=pad)
@@ -186,6 +214,7 @@ class App(tk.Tk):
         top = ttk.Frame(progress)
         top.pack(fill="x")
         ttk.Label(top, textvariable=self.status).pack(side="left")
+        self._help(top, "detail_log").pack(side="right", padx=(pad // 2, 0))
         ttk.Checkbutton(top, text="상세 로그 보기", variable=self.show_detail_log,
                         command=self._render_log).pack(side="right")
         ttk.Label(top, textvariable=self.count_text).pack(side="right", padx=self.px(12))
@@ -199,6 +228,7 @@ class App(tk.Tk):
         header.pack(fill="x")
         ttk.Label(header, textvariable=self.summary, font=_bold_font()).pack(side="left")
         self.unchecked_button = ttk.Button(header, textvariable=self.unchecked_text, command=self._show_unchecked)
+        self.unchecked_help = self._help(header, "unchecked")
         for text, command in [("HTML 보고서로 저장", self._export_html), ("CSV로 저장", self._export_csv),
                               ("JSON으로 저장", self._export_json)]:
             ttk.Button(header, text=text, command=command).pack(side="right", padx=(pad, 0))
@@ -231,10 +261,10 @@ class App(tk.Tk):
         heading_font = _font_of("Treeview.Heading") or font.nametofont("TkHeadingFont")
         cell_font = _font_of("Treeview") or font.nametofont("TkDefaultFont")
         for key, title, sample in columns:
-            width = max(heading_font.measure(title), cell_font.measure(sample)) + self.px(28)
+            width = max(heading_font.measure(f"{title} ?"), cell_font.measure(sample)) + self.px(28)
             if key == "content":
                 width = self.px(240)
-            self.table.heading(key, text=title)
+            self.table.heading(key, text=f"{title} ?")
             self.table.column(key, width=width, minwidth=width if key != "content" else self.px(120),
                               anchor="w" if key == "content" else "center", stretch=key == "content")
         ttk.Style(self).configure("Treeview", rowheight=int(cell_font.metrics("linespace") * 1.5))
@@ -246,7 +276,73 @@ class App(tk.Tk):
         scroll.pack(side="right", fill="y")
         self.table.bind("<<TreeviewSelect>>", self._on_select)
         self.table.bind("<Double-1>", lambda e: self._open_page())
+        self.table_tooltip = Tooltip(self.table, self._heading_help, self.px(380))
         return frame
+
+    def _heading_help(self, event) -> tuple[str, str] | None:
+        if event is None or self.table.identify_region(event.x, event.y) != "heading":
+            return None
+        column = self.table.identify_column(event.x)
+        try:
+            key = self.table["columns"][int(column.lstrip("#")) - 1]
+        except (ValueError, IndexError):
+            return None
+        return help_content(COLUMNS[key]) if key in COLUMNS else None
+
+    def _help(self, parent, key: str) -> HelpIcon:
+        item = UNCHECKED if key == "unchecked" else SETTINGS[key]
+        icon = HelpIcon(parent, item, self.px(16), self.px(380))
+        self.help_icons[key] = icon
+        return icon
+
+    def _update_estimate(self):
+        try:
+            pages = int(self.max_pages.get())
+        except (tk.TclError, ValueError):
+            self.estimate.set("")
+            return
+        self.estimate.set(f"(예상 {estimate_text(max(1, pages))})")
+
+    def _show_quick_start(self):
+        parts = [("title", QUICK_START_TITLE + "\n")]
+        for i, (name, text) in enumerate(QUICK_START, 1):
+            parts += [("label", f"{i}. {name}\n"), ("", text + "\n")]
+        parts += [("label", "\n"), ("hint", QUICK_START_FOOTER + "\n점검을 시작하면 결과가 여기에 표시됩니다.\n")]
+        self.open_target = ""
+        self._set_detail(parts)
+
+    def _show_quick_start_dialog(self):
+        messagebox.showinfo(QUICK_START_TITLE, quick_start_text(), parent=self)
+
+    def _show_help_window(self):
+        window = tk.Toplevel(self)
+        window.title("설정·결과 설명")
+        window.transient(self)
+        w = min(self.px(760), self.winfo_screenwidth() - self.px(40))
+        h = min(self.px(640), self.winfo_screenheight() - self.px(80))
+        window.geometry(f"{w}x{h}+{self.winfo_rootx() + self.px(40)}+{self.winfo_rooty() + self.px(40)}")
+        frame = ttk.Frame(window, padding=self.px(10))
+        frame.pack(fill="both", expand=True)
+        ttk.Button(frame, text="닫기", command=window.destroy).pack(side="bottom", anchor="e", pady=(self.px(6), 0))
+        text = self._text_box(frame, wrap="word")
+        body = font.nametofont("TkTextFont")
+        text.tag_configure("h1", font=(body.actual("family"), body.actual("size") + 2, "bold"), spacing1=self.px(10),
+                           spacing3=self.px(4))
+        text.tag_configure("h2", font=(body.actual("family"), body.actual("size"), "bold"), spacing1=self.px(8))
+        text.tag_configure("hint", foreground=HINT_COLOR)
+        parts = [("h1", QUICK_START_TITLE + "\n")]
+        parts += [("", f"{i}. {name} - {desc}\n") for i, (name, desc) in enumerate(QUICK_START, 1)]
+        for heading, items in (("설정 설명", SETTINGS.values()), ("결과 화면 설명", [*COLUMNS.values(), UNCHECKED])):
+            parts.append(("h1", heading + "\n"))
+            for item in items:
+                parts.append(("h2", item.title + "\n"))
+                for label, value in item.lines():
+                    parts += [("hint", f"{label}: "), ("", value + "\n")]
+        text.configure(state="normal")
+        for tag, value in parts:
+            text.insert("end", value, tag or ())
+        text.configure(state="disabled")
+        self.help_window, self.help_text = window, text
 
     def _text_box(self, parent, **options) -> tk.Text:
         frame = ttk.Frame(parent)
@@ -291,7 +387,7 @@ class App(tk.Tk):
 
     def _toggle_advanced(self):
         if self.show_advanced.get():
-            self.advanced_frame.pack(side="left")
+            self.advanced_frame.pack(fill="x", pady=(self.px(6), 0))
         else:
             self.advanced_frame.pack_forget()
 
@@ -460,6 +556,7 @@ class App(tk.Tk):
         self.table.delete(*self.table.get_children())
         self.summary.set("")
         self.unchecked_button.pack_forget()
+        self.unchecked_help.pack_forget()
         self._show_guide("점검이 끝나면 결과가 여기에 표시됩니다.")
 
     def _show_report(self, crawl: dict | None, report: dict):
@@ -476,9 +573,11 @@ class App(tk.Tk):
                          f"  ·  점검 페이지 {report['meta'].get('page_count', 0)}개")
         unchecked = len(report.get("unchecked", []))
         self.unchecked_button.pack_forget()
+        self.unchecked_help.pack_forget()
         if unchecked:
             self.unchecked_text.set(f"⚠ 점검하지 못한 영역 {unchecked}곳")
-            self.unchecked_button.pack(side="left", padx=self.px(12))
+            self.unchecked_button.pack(side="left", padx=(self.px(12), self.px(3)))
+            self.unchecked_help.pack(side="left")
         self._show_overview()
 
     def _show_overview(self):
@@ -494,8 +593,7 @@ class App(tk.Tk):
         parts += [("label", "점검 요약\n"), ("", "\n".join(f"· {line}" for line in stats_lines(report)) + "\n")]
         if report.get("unchecked"):
             parts += [("label", "\n"), ("warn", f"점검하지 못한 영역이 {len(report['unchecked'])}곳 있습니다. "
-                                                "숨겨진 iframe은 불법광고의 주요 수법이므로 "
-                                                "[⚠ 점검하지 못한 영역] 버튼을 눌러 확인하세요.\n")]
+                                                f"{UNCHECKED.when} [⚠ 점검하지 못한 영역] 버튼을 눌러 목록을 확인하세요.\n")]
         self.open_target = ""
         self._set_detail(parts)
 
@@ -509,8 +607,9 @@ class App(tk.Tk):
         items = self.report.get("unchecked", [])
         self.table.selection_remove(*self.table.selection())
         parts = [("title", f"점검하지 못한 영역 {len(items)}곳\n"),
-                 ("warn", "아래 영역은 내용을 확인하지 못했습니다. 숨겨진 iframe은 불법광고의 주요 수법이므로 "
-                          "주소를 직접 열어 확인하세요.\n")]
+                 ("label", UNCHECKED.labels[0] + "\n"), ("", UNCHECKED.what + "\n"),
+                 ("label", UNCHECKED.labels[1] + "\n"), ("warn", UNCHECKED.when + "\n"),
+                 ("hint", UNCHECKED.recommend + "\n")]
         for i, item in enumerate(items, 1):
             parts += [("label", f"{i}. {item['kind_label']}  {display_url(item['url']) or '(주소 알 수 없음)'}\n"),
                       ("", f"이유: {item['reason']}\n")]
