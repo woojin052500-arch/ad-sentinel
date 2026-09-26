@@ -1,5 +1,3 @@
-"""url_utils 단위 테스트 (브라우저 불필요)."""
-
 from ad_sentinel.crawler.url_utils import is_crawlable, is_same_site, normalize_url
 
 

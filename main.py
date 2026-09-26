@@ -1,12 +1,3 @@
-"""AD Sentinel 실행 진입점.
-
-지금(1단계)은 명령줄에서 크롤러만 실행한다. 3단계에서 인자 없이 실행하면 GUI가 뜨도록 바꿀 예정.
-
-사용 예:
-    python main.py https://www.example.go.kr --max-pages 20
-    python main.py https://www.example.go.kr --max-pages 50 --depth 2 --out result.json
-"""
-
 import argparse
 import logging
 import sys
@@ -53,7 +44,6 @@ def main(argv=None) -> int:
 
     path = save_json(result, args.out)
 
-    # 간단한 요약 출력
     elements = [e for page in result["pages"] for e in page["elements"]]
     count = lambda t: sum(1 for e in elements if e["type"] == t)
     print(f"\n방문 페이지: {len(result['pages'])}개")
