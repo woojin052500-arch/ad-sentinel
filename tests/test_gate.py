@@ -118,7 +118,9 @@ def test_sitemap_pages_are_added():
                                                                                  "sitemap-pages.xml"]
     assert any("private/secret.html" in s["url"] for s in crawl["skipped"])
     assert not any("logout" in r for r in server.requests)
-    assert crawl["meta"]["notes"] == []
+    assert crawl["meta"]["notes"] == [
+        "sitemap.xml에 있는 주소로만 4페이지를 점검했습니다. 게시판 페이지를 찾지 못했을 수 있습니다. "
+        "입장 버튼이 있는 사이트라면 입장 후 주소를, 게시판이 있다면 게시판 주소를 시작 주소로 넣어보세요."]
     assert any(p["found_on"] == "sitemap.xml" for p in crawl["pages"])
     report = detect(crawl)
     assert any("바카라" in f["content"] for f in report["findings"])
@@ -143,3 +145,60 @@ def test_sitemap_parsing():
 ])
 def test_unsafe_urls_are_not_visited(url, safe):
     assert is_safe_to_visit(url) is safe
+
+
+@pytest.fixture(scope="module")
+def community_run():
+    server = Server("community")
+    crawl = server.crawl("index.html")
+    return crawl, server.requests
+
+
+def test_community_gate_with_many_footer_links_is_entered(community_run):
+    crawl, requests = community_run
+    paths = _paths(crawl)
+    assert "board/view.html?no=1" in paths and "board/view.html?no=2" in paths and "board/view.html?no=3" in paths
+    assert len(paths) == 10
+    first = crawl["pages"][0]
+    assert first["gate"]["text"] == "커뮤니티 입장하기"
+    assert first["gate"]["links_before"] == 0 and first["gate"]["links_after"] == 3
+    assert first["gate"]["new_links"] >= 3
+    assert "/clicked/enter" in requests and "/clicked/login" not in requests
+    assert crawl["meta"]["notes"] == []
+    report = detect(crawl)
+    spam = [f for f in report["findings"] if "바카라" in f["content"]]
+    assert spam and spam[0]["pages"][0].endswith("view.html?no=2")
+
+
+def test_footer_links_are_marked(community_run):
+    crawl, _ = community_run
+    links = [e for e in crawl["pages"][0]["elements"] if e["type"] == "link"]
+    footer = [e for e in links if e.get("footer")]
+    assert {e["content"] for e in footer} >= {"이용약관", "개인정보처리방침", "서비스 안내", "통계"}
+
+
+def test_community_without_gate_warns_board_missing():
+    crawl = Server("community").crawl("index.html", enter_gate=False)
+    assert len(crawl["pages"]) == 7
+    assert not any("board" in p["url"] for p in crawl["pages"])
+    assert crawl["meta"]["notes"] == [
+        "sitemap.xml에 있는 주소로만 7페이지를 점검했습니다. 게시판 페이지를 찾지 못했을 수 있습니다. "
+        "입장 버튼이 있는 사이트라면 입장 후 주소를, 게시판이 있다면 게시판 주소를 시작 주소로 넣어보세요."]
+
+
+def test_content_page_weak_button_is_not_clicked():
+    server = Server("community")
+    crawl = server.crawl("normal.html", use_sitemap=False, max_depth=0)
+    first = crawl["pages"][0]
+    assert first["gate"] is None and first["gate_attempt"] is None
+    assert not any(r.startswith("/clicked/") for r in server.requests)
+
+
+def test_boilerplate_link_rules():
+    from ad_sentinel.crawler.gate import is_boilerplate_link
+
+    assert is_boilerplate_link({"content": "개인정보 처리방침"})
+    assert is_boilerplate_link({"content": "이용약관"})
+    assert is_boilerplate_link({"content": "공지사항", "footer": True})
+    assert not is_boilerplate_link({"content": "자유게시판"})
+    assert not is_boilerplate_link({"content": "사업 안내"})

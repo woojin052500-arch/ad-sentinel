@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="utf-8"><title>게시글</title><script src="/site.js"></script><script>requireEntry();</script></head>
+<body>
+  <article id="post"></article>
+  <a href="list.html">목록</a>
+  <script>
+    var posts = {
+      '1': ['오늘 날씨 좋네요', '산책하기 좋은 날입니다.', ''],
+      '2': ['가입 인사합니다', '잘 부탁드립니다.', '먹튀 없는 바카라 사이트 가입코드 777 텔레그램 @bet777'],
+      '3': ['모임 후기', '즐거웠습니다.', '']
+    };
+    var no = new URLSearchParams(location.search).get('no') || '1';
+    var p = posts[no];
+    document.getElementById('post').innerHTML = '<h2>' + p[0] + '</h2><p>' + p[1] + '</p>' +
+      (p[2] ? '<ul class="comments"><li class="comment">' + p[2] + '</li></ul>' : '');
+    footer();
+  </script>
+</body>
+</html>

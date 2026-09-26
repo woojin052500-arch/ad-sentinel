@@ -31,6 +31,8 @@ EXTRACT_JS = r"""
     const MAX_SCAN = opts.maxScan;
     const MAX_TEXT = opts.maxTextLen;
     const TIME_BUDGET = opts.timeBudgetMs;
+    const FOOTER = opts.footerSelector || 'footer';
+    const inFooter = el => { try { return !!el.closest(FOOTER); } catch (e) { return false; } };
     const t0 = performance.now();
 
     const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'META', 'LINK',
@@ -238,7 +240,7 @@ EXTRACT_JS = r"""
     function navRecord(el, nav, hidden, r) {
         return { type: 'link', source: nav.source, selector: cssSelector(el), href: resolveUrl(nav.url),
                  raw_href: nav.url, content: clip(el.textContent || el.getAttribute('aria-label') || el.title || ''),
-                 target: '', hidden, rect: r ? rectOf(r) : null };
+                 target: '', hidden, footer: inFooter(el), rect: r ? rectOf(r) : null };
     }
 
     const all = body.getElementsByTagName('*');
@@ -268,7 +270,7 @@ EXTRACT_JS = r"""
             if (isLink) {
                 push({ type: 'link', selector: cssSelector(el), href: el.href,
                        raw_href: el.getAttribute('href'), content: clip(el.textContent || el.title || ''),
-                       target: el.getAttribute('target') || '', hidden: true, rect: null });
+                       target: el.getAttribute('target') || '', hidden: true, footer: inFooter(el), rect: null });
             }
             if (isFrame) {
                 push({ type: 'iframe', selector: cssSelector(el), src: el.src || '',
@@ -305,7 +307,8 @@ EXTRACT_JS = r"""
             }
             push({ type: 'link', selector: cssSelector(el), href: el.href,
                    raw_href: el.getAttribute('href'), content: clip(label),
-                   target: el.getAttribute('target') || '', hidden: selfHidden, rect: rectOf(r) });
+                   target: el.getAttribute('target') || '', hidden: selfHidden, footer: inFooter(el),
+                   rect: rectOf(r) });
         }
 
         if (nav) push(navRecord(el, nav, selfHidden, r));

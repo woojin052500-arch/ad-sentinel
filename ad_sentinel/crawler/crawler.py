@@ -13,7 +13,8 @@ from ad_sentinel.config import ROBOTS_IGNORE_WARNING, CrawlConfig
 from ad_sentinel.crawler.browser import launch_browser
 from ad_sentinel.crawler import sitemap
 from ad_sentinel.crawler.extract_js import EXTRACT_JS, FRAME_ELEMENT_JS
-from ad_sentinel.crawler.gate import DANGER_WORDS, FIND_GATE_JS, GATE_WORDS
+from ad_sentinel.crawler.gate import (DANGER_WORDS, FIND_GATE_JS, FOOTER_SELECTOR, GATE_WORDS, STRONG_GATE_WORDS,
+                                      is_boilerplate_link)
 from ad_sentinel.crawler.robots import RobotsChecker
 from ad_sentinel.crawler.url_utils import is_crawlable, is_safe_to_visit, is_same_site, normalize_url
 from ad_sentinel.paths import setup_bundled_browser
@@ -48,6 +49,7 @@ class Crawler:
         self.stop_event = stop_event or threading.Event()
         self.robots = RobotsChecker() if config.respect_robots else None
         self.gate_key = ""
+        self.content_linked: set[str] = set()
 
     def run(self) -> dict:
         cfg = self.config
@@ -114,6 +116,7 @@ class Crawler:
                     self._report(len(result["pages"]), url)
                     allow_gate = mode == "site" and cfg.enter_gate and (depth == 0 or bool(self.gate_key))
                     page_result, links = self._crawl_page(context, url, depth, allow_gate)
+                    self.content_linked |= self._content_links(page_result)
                     page_result["found_on"] = found_on
                     result["pages"].append(page_result)
                     if self.on_page:
@@ -161,6 +164,7 @@ class Crawler:
             "timed_out": False,
             "offsite_redirect": False,
             "gate": None,
+            "gate_attempt": None,
             "timings": {},
             "frames_skipped": [],
             "frames": [],
@@ -247,25 +251,40 @@ class Crawler:
         main = next((f for f in page_result["frames"] if f["is_main"]), None)
         page_result["title"] = main["title"] if main else ""
 
+    def _content_links(self, page_result: dict) -> set[str]:
+        records = [r for r in page_result["elements"] if r["type"] == "link" and not is_boilerplate_link(r)]
+        return set(self._next_links({**page_result, "elements": records}))
+
     def _try_gate(self, page: Page, page_result: dict, url: str, remaining_ms: Callable[[], int]) -> None:
         cfg = self.config
+        first = not self.gate_key
         own = {normalize_url(url), page_result["final_url"]}
-        link_count = len([u for u in self._next_links(page_result) if u not in own])
-        if link_count >= cfg.gate_link_threshold:
+        links_before = set(self._next_links(page_result)) - own
+        content_before = self._content_links(page_result) - own
+        if not first and len(content_before) >= cfg.gate_link_threshold:
             return
-        options = {"gateWords": GATE_WORDS, "dangerWords": DANGER_WORDS, "prefer": self.gate_key}
+        options = {"gateWords": GATE_WORDS, "strongWords": STRONG_GATE_WORDS, "dangerWords": DANGER_WORDS,
+                   "footerSelector": FOOTER_SELECTOR, "prefer": self.gate_key}
         try:
             gate = self._evaluate(page.main_frame, FIND_GATE_JS, options, min(5000, remaining_ms()))
         except PlaywrightError as e:
             log.warning("  입장 버튼 찾기 실패: %s", str(e).strip().splitlines()[0])
             return
         if not gate:
-            if not self.gate_key:
-                log.info("  같은 사이트 링크가 %d개뿐이지만 입장 버튼을 찾지 못함", link_count)
+            if first and len(content_before) < cfg.gate_link_threshold:
+                log.info("  본문 링크가 %d개뿐이지만 입장 버튼을 찾지 못함", len(content_before))
+            return
+
+        few_links = len(content_before) < cfg.gate_link_threshold
+        big_button = (gate["viewport_ratio"] >= 0.004 and gate["first_screen"] and gate["content_chars"] < 800)
+        if first and not (few_links or big_button or gate["strong"]):
+            log.info("  '%s' 버튼이 있지만 관문 페이지로 보이지 않아 누르지 않음 (본문 링크 %d개, 본문 %d자)",
+                     gate["text"], len(content_before), gate["content_chars"])
             return
 
         before = page.url
-        log.info("  같은 사이트 링크 %d개 → 입장 버튼 '%s' 클릭", link_count, gate["text"])
+        log.info("  본문 링크 %d개(전체 %d개), 본문 %d자 → 입장 버튼 '%s' 클릭",
+                 len(content_before), len(links_before), gate["content_chars"], gate["text"])
         try:
             page.locator("[data-ad-sentinel-gate='1']").first.click(timeout=max(1, min(5000, remaining_ms())))
         except PlaywrightError as e:
@@ -287,17 +306,23 @@ class Crawler:
         after = normalize_url(page.url) or page.url
         page_result["final_url"] = after
         page_result["offsite_redirect"] = not is_same_site(page.url, url, cfg.include_subdomains)
-        page_result["gate"] = {
+        new_links = set(self._next_links(page_result)) - links_before - own - {after}
+        info = {
             "text": gate["text"], "url_before": before, "url_after": after,
             "url_changed": after != (normalize_url(before) or before),
-            "links_before": link_count,
-            "links_after": len([u for u in self._next_links(page_result) if u not in own | {after}]),
+            "links_before": len(content_before),
+            "links_after": len(self._content_links(page_result) - own - {after}),
+            "new_links": len(new_links),
         }
-        if self.gate_key:
-            log.info("  입장 버튼 다시 클릭 후 점검 계속")
+        if not new_links and not info["url_changed"]:
+            page_result["gate_attempt"] = info
+            log.info("  입장 버튼 '%s'을 눌렀지만 새로 생긴 링크가 없음", gate["text"])
+            return
+        page_result["gate"] = info
+        if first:
+            notice.info("입장 버튼('%s') 클릭 후 점검 계속 (새 링크 %d개)", gate["text"], len(new_links))
         else:
-            notice.info("입장 버튼('%s') 클릭 후 점검 계속 (링크 %d개 → %d개)",
-                        gate["text"], link_count, page_result["gate"]["links_after"])
+            log.info("  입장 버튼 다시 클릭 후 점검 계속 (새 링크 %d개)", len(new_links))
         self.gate_key = gate["key"]
 
     def _add_sitemap_urls(self, context, start_url: str, queue: deque, seen: set) -> dict:
@@ -323,9 +348,21 @@ class Crawler:
 
     def _notes(self, mode: str, result: dict) -> list[str]:
         cfg = self.config
-        checked = len(result["pages"])
-        if mode != "site" or result["meta"]["stopped_by_user"]:
+        pages = result["pages"]
+        checked = len(pages)
+        if mode != "site" or result["meta"]["stopped_by_user"] or not pages:
             return []
+        linked = [p for p in pages[1:] if {p["url"], p.get("final_url")} & self.content_linked]
+        if checked >= 2 and not linked:
+            from_sitemap = sum(1 for p in pages[1:] if p.get("found_on") == "sitemap.xml")
+            if from_sitemap == checked - 1:
+                source = "sitemap.xml에 있는 주소"
+            elif from_sitemap:
+                source = "sitemap.xml과 약관·안내 같은 고정 링크"
+            else:
+                source = "약관·안내 같은 고정 링크"
+            return [f"{source}로만 {checked}페이지를 점검했습니다. 게시판 페이지를 찾지 못했을 수 있습니다. "
+                    "입장 버튼이 있는 사이트라면 입장 후 주소를, 게시판이 있다면 게시판 주소를 시작 주소로 넣어보세요."]
         if checked > cfg.max_pages * 0.2 or cfg.max_pages - checked < 5:
             return []
         if result["meta"].get("sitemap", {}).get("urls"):
@@ -399,6 +436,7 @@ class Crawler:
                     "maxScan": cfg.max_scan_elements,
                     "maxTextLen": cfg.max_text_len,
                     "timeBudgetMs": budget_ms,
+                    "footerSelector": FOOTER_SELECTOR,
                 },
                 max(1, timeout_ms - int((time.monotonic() - started) * 1000)),
             )

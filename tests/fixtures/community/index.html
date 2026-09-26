@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="utf-8"><title>커뮤월드</title><script src="/site.js"></script>
+<style>
+  .hero { text-align: center; padding: 120px 20px; }
+  .enter-btn { font-size: 28px; padding: 24px 80px; background: #2563eb; color: #fff; border: 0; border-radius: 12px; }
+  .top a, .top button { font-size: 12px; }
+</style></head>
+<body>
+  <div class="top"><button onclick="clickLog('login')">로그인</button></div>
+  <div class="hero">
+    <h1>커뮤월드</h1>
+    <p>함께 이야기 나누는 공간</p>
+    <button class="enter-btn" onclick="enter()">커뮤니티 입장하기</button>
+  </div>
+  <script>
+    function enter() {
+      clickLog('enter');
+      document.cookie = 'entered=1; path=/';
+      location.href = '/board/list.html';
+    }
+    footer();
+  </script>
+</body>
+</html>
