@@ -20,6 +20,7 @@ class Discovery:
     pages: list[str] = field(default_factory=list)
     titles: dict[str, str] = field(default_factory=dict)
     sources: list[dict] = field(default_factory=list)
+    missing: list[dict] = field(default_factory=list)
 
     def add(self, url: str, title: str = "") -> None:
         if url not in self.titles:
@@ -29,13 +30,19 @@ class Discovery:
             self.titles[url] = title
 
 
-def _get(request: APIRequestContext, url: str, timeout_ms: int) -> bytes | None:
+def _get(request: APIRequestContext, url: str, timeout_ms: int, missing: list | None = None) -> bytes | None:
+    path = urlsplit(url).path or "/"
     try:
         response = request.get(url, timeout=timeout_ms, fail_on_status_code=False, max_redirects=5)
     except PlaywrightError as e:
-        log.debug("sitemap 요청 실패 %s: %s", url, e)
+        log.info("sitemap·RSS 후보 %s 읽기 실패: %s", path, str(e).strip().splitlines()[0])
+        if missing is not None:
+            missing.append({"url": url, "reason": "요청 실패"})
         return None
     if not response.ok:
+        log.info("sitemap·RSS 후보 %s 없음(%d)", path, response.status)
+        if missing is not None:
+            missing.append({"url": url, "reason": f"HTTP {response.status}"})
         return None
     body = response.body()[:MAX_BYTES]
     if body[:2] == b"\x1f\x8b":
@@ -115,7 +122,7 @@ def parse_sitemap(data: bytes, base: str) -> tuple[list[str], list[str]]:
 
 
 def discover(request: APIRequestContext, start_url: str, max_urls: int, explicit: list[str] | None = None,
-             timeout_ms: int = 10000) -> Discovery:
+             timeout_ms: int = 10000, auto: bool = True) -> Discovery:
     parts = urlsplit(start_url)
     origin = f"{parts.scheme}://{parts.netloc}"
     result = Discovery()
@@ -128,11 +135,13 @@ def discover(request: APIRequestContext, start_url: str, max_urls: int, explicit
             if current in visited:
                 continue
             visited.add(current)
-            data = _get(request, current, timeout_ms)
+            data = _get(request, current, timeout_ms, result.missing)
             if not data:
                 continue
             kind, pages, children = parse_document(data, current)
             if not kind:
+                log.info("sitemap·RSS 후보 %s 없음(sitemap·RSS 형식이 아님)", urlsplit(current).path or "/")
+                result.missing.append({"url": current, "reason": "sitemap·RSS 형식이 아님"})
                 continue
             before = len(result.pages)
             for page, title in pages:
@@ -145,6 +154,8 @@ def discover(request: APIRequestContext, start_url: str, max_urls: int, explicit
 
     for url in explicit or []:
         read(urljoin(origin + "/", url.strip()), "지정")
+    if not auto:
+        return result
     robots = _get(request, origin + "/robots.txt", timeout_ms)
     for url in sitemap_locations(robots.decode("utf-8", errors="ignore"), origin + "/") if robots else []:
         read(url, "robots.txt")

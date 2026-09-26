@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="utf-8"><title>상정인사이드 - 자유로운 토론 커뮤니티</title><script src="/common.js"></script></head>
+<body>
+  <div id="app" style="text-align:center;padding:120px 20px">
+    <h1>회원가입 없이, 바로 익명.</h1>
+    <button style="font-size:22px;padding:16px 40px" onclick="start()">지금 시작하기</button>
+  </div>
+  <script>
+    function start() {
+      clickLog('start');
+      document.getElementById('app').innerHTML = '<h2>최신 글</h2>' +
+        '<p>오늘도 다양한 생각이 올라왔습니다. 인기 글과 이번 주 토론 주제를 확인해 보세요. 자유롭게 의견을 남겨 주세요.</p>';
+    }
+  </script>
+</body>
+</html>

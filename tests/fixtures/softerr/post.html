@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="utf-8"><title>상정인사이드 - 자유로운 토론 커뮤니티</title><script src="/common.js"></script></head>
+<body>
+  <div class="banner" style="padding:20px;text-align:center">
+    <button style="font-size:22px;padding:16px 40px" onclick="goHome('restart')">지금 시작하기</button>
+  </div>
+  <article class="post" id="post"></article>
+  <button onclick="goHome('home')">홈으로 돌아가기</button>
+  <script>
+    var no = parseInt(location.pathname.split('/').pop(), 10);
+    var ad = no === 3 ? '<div style="display:none"><a href="http://casino.invalid/">카지노 먹튀검증 바로가기</a></div>' : '';
+    document.getElementById('post').innerHTML = '<h2 class="title">글 제목 ' + no + '</h2>' +
+      '<p>글 번호 ' + no + '의 본문입니다.</p><ul class="comments"><li class="comment">좋은 글이네요' + ad + '</li></ul>';
+  </script>
+</body>
+</html>

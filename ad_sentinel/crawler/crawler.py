@@ -15,7 +15,7 @@ from ad_sentinel.config import ROBOTS_IGNORE_WARNING, CrawlConfig
 from ad_sentinel.crawler.browser import launch_browser
 from ad_sentinel.crawler import sitemap
 from ad_sentinel.crawler.extract_js import EXTRACT_JS, FRAME_ELEMENT_JS
-from ad_sentinel.crawler.gate import (DANGER_WORDS, FIND_GATE_JS, FIND_MORE_JS, FOOTER_SELECTOR, GATE_PARTS,
+from ad_sentinel.crawler.gate import (DANGER_WORDS, EXIT_PATTERN, FIND_GATE_JS, FIND_MORE_JS, FOOTER_SELECTOR, GATE_PARTS,
                                       GATE_WORDS, JS_CLICK, MAX_GATE_CANDIDATES, PAGE_METRICS_JS, STRONG_GATE_WORDS,
                                       content_changed, content_grew, is_boilerplate_link)
 from ad_sentinel.crawler.robots import RobotsChecker
@@ -26,6 +26,11 @@ log = logging.getLogger(__name__)
 notice = logging.getLogger("ad_sentinel.notice")
 
 ProgressCallback = Callable[[int, int, str], None]
+ERROR_PAGE_TEXT = re.compile(
+    r"404|찾을\s*수\s*없|존재하지\s*않|길을\s*(잠깐\s*|잠시\s*)?잃|이동되었|없는\s*페이지|페이지가\s*없|"
+    r"잘못된\s*(주소|경로|접근)|not\s*found|page\s*not|does\s*not\s*exist", re.IGNORECASE)
+FEED_PATH = re.compile(r"\.(xml|rss|atom)(\.gz)?$|/(rss|feed|atom)/?$", re.IGNORECASE)
+REPEAT_WARN = 3
 RATE_LIMIT_TEXT = re.compile(
     r"요청\s*(속도|횟수)?\s*제한|too\s*many\s*requests|rate\s*limit|과도한\s*(요청|접속)|"
     r"잠시\s*후\s*다시\s*(시도|접속)|접속이\s*(차단|제한)", re.IGNORECASE)
@@ -58,6 +63,11 @@ class Crawler:
         self.content_linked: set[str] = set()
         self.listed_titles: dict[str, str] = {}
         self.delay = config.delay_sec
+        self.sitemap_urls = list(config.sitemap_urls)
+        self.gate_rejections = 0
+        self.gate_disabled = False
+        self.screens: dict[int, list[str]] = {}
+        self.repeat_warned: set[int] = set()
         self.throttle_streak = 0
         self.forbidden_streak = 0
 
@@ -73,6 +83,13 @@ class Crawler:
             if not start_url:
                 raise ValueError(f"올바른 http/https 주소가 아닙니다: {cfg.start_url}")
             seeds, mode, self.total = [start_url], "site", cfg.max_pages
+            if FEED_PATH.search(urlsplit(start_url).path):
+                parts = urlsplit(start_url)
+                home = f"{parts.scheme}://{parts.netloc}/"
+                self.sitemap_urls.append(start_url)
+                notice.warning("시작 주소(%s)가 sitemap·RSS 주소로 보여 sitemap으로 읽고, 사이트 첫 화면(%s)부터 "
+                               "점검합니다. sitemap 주소는 'sitemap 또는 RSS 주소' 칸에 넣어 주세요.", start_url, home)
+                start_url, seeds = home, [home]
 
         result = {
             "meta": {
@@ -112,7 +129,7 @@ class Crawler:
                 bypass_csp=True,
             )
             try:
-                if mode == "site" and (cfg.use_sitemap or cfg.sitemap_urls):
+                if mode == "site" and (cfg.use_sitemap or self.sitemap_urls):
                     added = self._add_sitemap_urls(context, start_url, queue, seen)
                     result["meta"]["sitemap"] = added
                 while queue and len(result["pages"]) < self.total:
@@ -139,6 +156,11 @@ class Crawler:
                     page_result["found_on"] = found_on
                     page_result["listed_title"] = self.listed_titles.get(url, "")
                     result["pages"].append(page_result)
+                    if len(result["pages"]) == 1 and page_result.get("error_page"):
+                        result["meta"]["start_error"] = page_result["error_page"]
+                        notice.warning("시작 주소가 오류 페이지입니다(%s). 입장 버튼은 누르지 않았습니다. 주소를 확인하세요: %s",
+                                       page_result["error_page"], url)
+                    self._track_screen(page_result)
                     if self.on_page:
                         self.on_page(len(result["pages"]), page_result)
 
@@ -160,6 +182,11 @@ class Crawler:
         self._report(len(result["pages"]), "", 0)
         result["meta"]["final_delay_sec"] = self.delay
         result["meta"]["gate"] = next((p["gate"] for p in result["pages"] if p.get("gate")), None)
+        result["meta"]["repeated_screens"] = [
+            {"title": self._screen_title(result, urls[0]), "count": len(urls), "urls": urls[:10]}
+            for urls in self.screens.values() if len(urls) >= REPEAT_WARN
+        ]
+        result["meta"]["gate_rejections"] = self.gate_rejections
         result["meta"]["notes"] = self._notes(mode, result)
         for note in result["meta"]["notes"]:
             notice.info(note)
@@ -172,6 +199,35 @@ class Crawler:
         log.info("[%d/%d] %s", done, total, url or "완료")
         if self.on_progress:
             self.on_progress(done, total, url)
+
+    def _track_screen(self, page_result: dict) -> None:
+        main = next((f for f in page_result["frames"] if f["is_main"]), None)
+        text = re.sub(r"\s+", "", (main or {}).get("text") or "")[:5000]
+        if len(text) < 20:
+            return
+        key = hash((page_result.get("title") or "", text))
+        urls = self.screens.setdefault(key, [])
+        if page_result["url"] not in urls:
+            urls.append(page_result["url"])
+        if len(urls) >= REPEAT_WARN and key not in self.repeat_warned:
+            self.repeat_warned.add(key)
+            notice.warning("게시글 대신 같은 화면이 반복 점검되고 있습니다: 제목 '%s'인 화면이 서로 다른 주소 %d곳에서 똑같이 "
+                           "나왔습니다. (예: %s)", page_result.get("title") or "(제목 없음)", len(urls), ", ".join(urls[:3]))
+
+    @staticmethod
+    def _screen_title(result: dict, url: str) -> str:
+        return next((p.get("title") or "" for p in result["pages"] if p["url"] == url), "")
+
+    @staticmethod
+    def _error_page_reason(page_result: dict) -> str:
+        status = page_result.get("status") or 0
+        if status >= 400:
+            return f"HTTP {status}"
+        main = next((f for f in page_result["frames"] if f["is_main"]), None)
+        text = ((main or {}).get("text") or "")
+        if len(re.sub(r"\s+", "", text)) < 800 and ERROR_PAGE_TEXT.search((page_result.get("title") or "") + " " + text):
+            return "오류 안내 문구가 있는 짧은 페이지(소프트 404)"
+        return ""
 
     def _sleep(self, seconds: float) -> None:
         end = time.monotonic() + seconds
@@ -234,6 +290,8 @@ class Crawler:
             "offsite_redirect": False,
             "gate": None,
             "gate_attempt": None,
+            "gate_rejected": None,
+            "error_page": "",
             "timings": {},
             "frames_skipped": [],
             "frames": [],
@@ -275,7 +333,11 @@ class Crawler:
             self._extract_all(page, page_result, remaining_ms)
             page_result["timings"]["extract"] = round(time.monotonic() - t, 2)
 
-            if allow_gate and not page_result["offsite_redirect"] and remaining_ms() > 3000:
+            page_result["error_page"] = self._error_page_reason(page_result)
+            if page_result["error_page"]:
+                log.warning("  오류 페이지로 보여 입장 버튼을 누르지 않음: %s", page_result["error_page"])
+            elif (allow_gate and not page_result["offsite_redirect"] and remaining_ms() > 3000
+                    and (first_page or not self.gate_disabled)):
                 self._try_gate(page, page_result, url, remaining_ms, first_page)
 
         except PlaywrightError as e:
@@ -377,6 +439,7 @@ class Crawler:
             return
         options = {"gateWords": GATE_WORDS, "gateParts": GATE_PARTS, "strongWords": STRONG_GATE_WORDS,
                    "dangerWords": DANGER_WORDS, "footerSelector": FOOTER_SELECTOR, "prefer": self.gate_key,
+                   "exitPattern": EXIT_PATTERN,
                    "maxCandidates": MAX_GATE_CANDIDATES}
         try:
             candidates = self._evaluate(page.main_frame, FIND_GATE_JS, options, min(5000, remaining_ms()))
@@ -411,6 +474,18 @@ class Crawler:
             log.info("  '%s'을 눌렀지만 화면 변화가 없음", gate["text"])
             page_result["gate_attempt"] = {"text": gate["text"], "changed": False}
         else:
+            return
+
+        moved_to = normalize_url(page.url) or page.url
+        if not first and moved_to != (normalize_url(url) or url) and moved_to != page_result["final_url"]:
+            self.gate_rejections += 1
+            page_result["gate_rejected"] = {"text": gate["text"], "moved_to": moved_to}
+            notice.warning("'%s' 버튼을 다시 눌렀더니 다른 페이지(%s)로 이동해, 그 결과는 버리고 원래 페이지 내용으로 "
+                           "점검합니다: %s", gate["text"], moved_to, url)
+            if self.gate_rejections >= 3 and not self.gate_disabled:
+                self.gate_disabled = True
+                self.gate_key = ""
+                notice.warning("입장 버튼 재클릭이 계속 다른 페이지로 이동해, 이후 페이지에서는 입장 버튼을 누르지 않습니다.")
             return
 
         try:
@@ -527,14 +602,13 @@ class Crawler:
 
     def _add_sitemap_urls(self, context, start_url: str, queue: deque, seen: set) -> dict:
         cfg = self.config
-        explicit = list(cfg.sitemap_urls)
+        explicit = list(self.sitemap_urls)
         try:
-            found = sitemap.discover(context.request, start_url, cfg.max_sitemap_urls, explicit=explicit)
+            found = sitemap.discover(context.request, start_url, cfg.max_sitemap_urls, explicit=explicit,
+                                     auto=cfg.use_sitemap)
         except Exception as e:
             log.warning("sitemap·RSS 읽기 실패: %s", e)
             return {"files": [], "sources": [], "urls": 0}
-        if not cfg.use_sitemap:
-            found.sources = [s for s in found.sources if s["source"] == "지정"]
         added = 0
         for raw in found.pages:
             u = normalize_url(raw)
@@ -551,7 +625,8 @@ class Crawler:
             if not any(s["source"] == "지정" for s in found.sources):
                 notice.warning("지정한 sitemap·RSS 주소를 읽지 못했습니다: %s", src)
                 break
-        info = {"files": [s["url"] for s in found.sources], "sources": found.sources, "urls": added}
+        info = {"files": [s["url"] for s in found.sources], "sources": found.sources, "urls": added,
+                "missing": found.missing}
         if found.sources:
             detail = ", ".join(f"{urlsplit(s['url']).path or '/'} {s['urls']}개" for s in found.sources if s["urls"])
             notice.info("sitemap·RSS에서 주소 %d개를 찾아 점검 목록에 추가했습니다. (%s)", added, detail or "새 주소 없음")
@@ -565,6 +640,16 @@ class Crawler:
         return info
 
     def _notes(self, mode: str, result: dict) -> list[str]:
+        notes = []
+        if result["meta"].get("start_error"):
+            notes.append(f"시작 주소가 오류 페이지입니다({result['meta']['start_error']}). 입장 버튼은 누르지 않았습니다. "
+                         "주소가 맞는지 브라우저로 확인해 보세요.")
+        for screen in result["meta"].get("repeated_screens") or []:
+            notes.append(f"게시글 대신 같은 화면이 반복 점검되었습니다: 제목 '{screen['title'] or '(제목 없음)'}'인 화면이 "
+                         f"서로 다른 주소 {screen['count']}곳에서 똑같이 나왔습니다. 이 주소들의 실제 내용은 점검되지 않았을 수 있습니다.")
+        return notes + self._base_notes(mode, result)
+
+    def _base_notes(self, mode: str, result: dict) -> list[str]:
         cfg = self.config
         pages = result["pages"]
         checked = len(pages)

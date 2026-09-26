@@ -2,12 +2,15 @@ import re
 
 GATE_WORDS = [
     "입장", "입장하기", "사이트입장", "홈페이지입장", "지금입장", "들어가기", "시작", "시작하기",
-    "확인", "계속", "계속하기", "메인으로", "메인바로가기", "홈으로", "홈페이지바로가기", "바로가기", "바로입장",
-    "enter", "entersite", "entry", "start", "continue", "go", "gotomain", "ok",
+    "확인", "계속", "계속하기", "바로가기", "바로입장",
+    "enter", "entersite", "entry", "start", "continue", "go", "ok",
 ]
 
-GATE_PARTS = ["입장", "들어가기", "시작하기", "시작", "계속하기", "둘러보기", "메인으로", "홈으로",
+GATE_PARTS = ["입장", "들어가기", "시작하기", "시작", "계속하기", "둘러보기",
               "enter", "start", "continue", "getstarted"]
+
+EXIT_PATTERN = (r"홈으로|홈페이지로|홈화면|메인으로|메인화면|메인페이지|돌아가|뒤로|이전|처음으로|첫화면|"
+                r"home|back|return|previous|prev")
 
 STRONG_GATE_WORDS = [
     "입장", "입장하기", "사이트입장", "홈페이지입장", "지금입장", "바로입장", "들어가기", "enter", "entersite", "entry",
@@ -68,6 +71,7 @@ FIND_GATE_JS = r"""
 """ + DANGER_CHECK_JS + r"""
     const GATE = new Set(opts.gateWords);
     const STRONG = new Set(opts.strongWords);
+    const EXIT = new RegExp(opts.exitPattern, 'i');
     const prefer = (opts.prefer || '').toLowerCase();
     const norm = s => (s || '').toLowerCase().replace(/[\s >»→▶▷►·.!,:~\-_\[\]()<«←◀◁]+/g, '');
     const hasPart = key => opts.gateParts.some(w => /^[a-z]+$/.test(w)
@@ -87,7 +91,7 @@ FIND_GATE_JS = r"""
         if (prefer) score = key === prefer ? 3 : 0;
         else if (GATE.has(key)) score = 2;
         else if (hasPart(key)) score = 1;
-        if (!score || isDanger(el, label)) continue;
+        if (!score || isDanger(el, label) || EXIT.test(key)) continue;
         const area = visibleArea(el);
         if (!area) continue;
         const strong = STRONG.has(key) || key.includes('입장') || key.includes('들어가기');

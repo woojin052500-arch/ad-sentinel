@@ -140,6 +140,8 @@ class Detector:
             if page.get("error"):
                 add("page", page["url"], page["url"], [], f"페이지를 열지 못함: {page['error']}")
                 continue
+            if page.get("error_page"):
+                add("page", page["url"], page["url"], [], f"오류 페이지로 열림({page['error_page']})")
             for f in page.get("frames", []):
                 url = f.get("frame_url") or f.get("src", "") or _iframe_src(page, f.get("frame_path", []))
                 kind = "page" if f.get("is_main") else "iframe"
@@ -156,6 +158,10 @@ class Detector:
                         f"일부만 검사함 (요소 {f['total_elements']}개 중 {f['scanned']}개)")
             for skipped in page.get("frames_skipped", []):
                 add("iframe", page["url"], skipped.get("frame_url", ""), [], skipped["reason"])
+        for screen in self.crawl.get("meta", {}).get("repeated_screens") or []:
+            for url in screen["urls"][1:]:
+                add("page", url, url, [], f"다른 주소와 똑같은 화면('{screen['title'] or '제목 없음'}')이 나와 "
+                                          "실제 내용이 점검되지 않았을 수 있음")
         for skipped in self.crawl.get("skipped", []):
             add("robots", skipped["url"], skipped["url"], [], "robots.txt에서 수집을 막아 둔 주소라 점검하지 않음")
 
