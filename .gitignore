@@ -7,7 +7,7 @@ __pycache__/
 .venv/
 venv/
 
-# PyInstaller 산출물 (4단계에서 사용, .spec 파일은 커밋함)
+# PyInstaller 산출물 (.spec 설정은 packaging/ 에 두고 커밋함)
 build/
 dist/
 

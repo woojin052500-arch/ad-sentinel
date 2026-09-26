@@ -38,7 +38,7 @@ ad-sentinel/
 │   ├── fixtures/site/         # 불법광고가 숨겨진 샘플 사이트 (테스트·시연용)
 │   ├── test_url_utils.py
 │   └── test_crawler.py
-├── build/                     # [4단계] PyInstaller 설정 (예정)
+├── packaging/                 # [4단계] PyInstaller 설정 (예정)
 └── docs/                      # [5단계] 매뉴얼·사용설명서·기획서 (예정)
 ```
 
