@@ -1,5 +1,11 @@
 from dataclasses import dataclass
 
+OWN_SITE_LABEL = "내가 관리하는 사이트 점검 (robots.txt 무시)"
+ROBOTS_IGNORE_WARNING = (
+    "robots.txt 제한을 무시하고 수집합니다. 본인이 관리하거나 점검 권한을 받은 사이트에만 사용하세요. "
+    "권한 없이 사용하면 사이트 운영 정책 위반이나 법적 문제가 될 수 있습니다."
+)
+
 
 @dataclass
 class CrawlConfig:

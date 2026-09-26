@@ -93,3 +93,29 @@ def test_detector_on_sample_site(result):
         assert by_content[content]["level"] == "high", content
     assert any(f["urls"] == ["http://bet.invalid/"] for f in report["findings"])
     assert all("정상적인" not in f["content"] for f in report["findings"])
+
+
+def test_ignore_robots_visits_blocked_page_with_warning(caplog):
+    import logging
+
+    from ad_sentinel.config import ROBOTS_IGNORE_WARNING
+
+    handler = functools.partial(QuietHandler, directory=str(SITE_DIR))
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_port}/"
+    config = CrawlConfig(start_url=base + "index.html", max_pages=10, delay_sec=0, render_wait_ms=300,
+                         respect_robots=False)
+    try:
+        with caplog.at_level(logging.WARNING):
+            result = Crawler(config).run()
+    finally:
+        server.shutdown()
+    assert result["meta"]["robots_ignored"] is True
+    assert result["skipped"] == []
+    assert any(p["url"].endswith("private/secret.html") for p in result["pages"])
+    assert ROBOTS_IGNORE_WARNING in caplog.text
+
+
+def test_robots_respected_by_default(result):
+    assert result["meta"]["robots_ignored"] is False

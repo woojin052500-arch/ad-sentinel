@@ -20,7 +20,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--report", default=None, help="탐지 결과 JSON 경로 (기본: output/detect_날짜_시간.json)")
     p.add_argument("--whitelist", nargs="*", default=[], help="추가로 신뢰할 도메인 (예: example.com)")
     p.add_argument("--same-host-only", action="store_true", help="하위 도메인은 탐색하지 않음")
-    p.add_argument("--ignore-robots", action="store_true", help="robots.txt 제한을 무시 (자기 기관 사이트 점검 시)")
+    p.add_argument("--ignore-robots", action="store_true",
+                   help="내가 관리하는 사이트 점검: robots.txt 제한을 무시 (권한 있는 사이트에만 사용)")
     p.add_argument("--show-browser", action="store_true", help="브라우저 창을 띄워서 실행")
     p.add_argument("--browser", default="", help="브라우저 실행 파일 경로 (기본: 자동 탐색)")
     args = p.parse_args(argv)
@@ -60,7 +61,9 @@ def print_report(report: dict) -> None:
     s = report["summary"]
     print(f"\n탐지 결과: {s['findings']}건 (불법광고 의심 {s['high']}건, 검토 필요 {s['suspect']}건)")
     for f in report["findings"][:30]:
-        print(f"  [{f['level_label']}] {f['category']} {f['score']}점 | {f['content'][:60]}")
+        print(f"  [{f['level_label']}] {f['pattern_label']} · {f['category']} {f['score']}점 | {f['content'][:60]}")
+        if f["reflected_params"]:
+            print(f"      반사된 파라미터: {', '.join(p['name'] + '=' + p['value'] for p in f['reflected_params'])}")
         print(f"      위치: {f['location_label']} | {' > '.join(f['frame_path'] + [f['selector']])}")
         print(f"      근거: {', '.join(e['label'] for e in f['evidence'])}")
     unknown = [d["host"] for d in report["external_domains"] if not d["whitelisted"]]

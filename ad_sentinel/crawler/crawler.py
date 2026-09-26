@@ -9,7 +9,7 @@ from playwright.sync_api import Error as PlaywrightError, Frame, Page, sync_play
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from ad_sentinel import __version__
-from ad_sentinel.config import CrawlConfig
+from ad_sentinel.config import ROBOTS_IGNORE_WARNING, CrawlConfig
 from ad_sentinel.crawler.browser import launch_browser
 from ad_sentinel.crawler.extract_js import EXTRACT_JS, FRAME_ELEMENT_JS
 from ad_sentinel.crawler.robots import RobotsChecker
@@ -56,11 +56,15 @@ class Crawler:
                 "started_at": _now(),
                 "finished_at": None,
                 "stopped_by_user": False,
+                "robots_ignored": not cfg.respect_robots,
                 "config": vars(cfg).copy(),
             },
             "pages": [],
             "skipped": [],
         }
+
+        if not cfg.respect_robots:
+            log.warning("[경고] %s", ROBOTS_IGNORE_WARNING)
 
         queue = deque([(start_url, 0, "")])
         seen = {start_url}

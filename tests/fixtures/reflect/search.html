@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="utf-8"><title>통합검색</title></head>
+<body>
+  <div id="result"><p class="summary"></p><ul><li>검색 결과가 없습니다.</li></ul></div>
+  <script>
+    var q = new URLSearchParams(location.search).get('q') || '';
+    document.querySelector('.summary').textContent = "'" + q + "' 검색 결과";
+  </script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="utf-8"><title>공단</title></head>
+<body>
+  <div id="header"><h1>공단 옛 누리집</h1></div>
+  <div id="content">
+    <h2 class="play-title"></h2>
+    <p>요청하신 메뉴를 불러오는 중입니다.</p>
+  </div>
+  <script>
+    var play = new URLSearchParams(location.search).get('play') || '';
+    document.querySelector('.play-title').textContent = play;
+    document.title = play + ' - 공단';
+  </script>
+</body>
+</html>

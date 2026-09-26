@@ -6,6 +6,7 @@ from ad_sentinel import __version__
 from ad_sentinel.crawler.url_utils import get_host, is_same_site
 from ad_sentinel.detector.domains import is_whitelisted, load_whitelist, suspicious_domain
 from ad_sentinel.detector.keywords import find_keywords, has_contact
+from ad_sentinel.detector.reflection import query_params, reflected_params
 
 HIGH = "high"
 SUSPECT = "suspect"
@@ -16,6 +17,13 @@ POINTS_SUSPICIOUS_DOMAIN = 3
 POINTS_REDIRECT = 3
 POINTS_EXTERNAL = 1
 POINTS_CONTACT = 1
+POINTS_REFLECTION = 2
+
+REFLECTION = "param_reflection"
+REDIRECT = "redirect"
+HIDDEN = "hidden"
+VISIBLE = "visible"
+PATTERN_LABELS = {REFLECTION: "URL 파라미터 반사", REDIRECT: "자동 이동", HIDDEN: "숨김 광고", VISIBLE: "노출 광고"}
 
 
 @dataclass
@@ -54,6 +62,7 @@ class Detector:
             f["id"] = i
 
         by_category = Counter(f["category"] for f in findings)
+        by_pattern = Counter(f["pattern_label"] for f in findings)
         return {
             "meta": {
                 "tool": "AD Sentinel",
@@ -69,6 +78,7 @@ class Detector:
                 "high": sum(1 for f in findings if f["level"] == HIGH),
                 "suspect": sum(1 for f in findings if f["level"] == SUSPECT),
                 "by_category": dict(by_category),
+                "by_pattern": dict(by_pattern),
             },
             "external_domains": [
                 {"host": host, "count": n, "whitelisted": is_whitelisted(host, self.whitelist)}
@@ -85,6 +95,12 @@ class Detector:
             if e["type"] == "iframe" and e.get("hidden")
         }
 
+        page_params = _unique(query_params(page["url"]) + query_params(page.get("final_url", "")))
+        main = next((f for f in page.get("frames", []) if f.get("is_main")), None)
+        if main and main.get("title"):
+            elements = elements + [{"type": "title", "selector": "title", "content": main["title"],
+                                    "frame_path": [], "frame_url": main.get("frame_url", page["url"])}]
+
         results = []
         for rec in elements:
             for url in _urls_of(rec):
@@ -92,7 +108,8 @@ class Detector:
                     self.external_hosts[get_host(url)] += 1
             frame_path = tuple(rec.get("frame_path", []))
             in_hidden_frame = any(frame_path[:i] in hidden_frames for i in range(1, len(frame_path) + 1))
-            finding = self.score(rec, in_hidden_frame)
+            params = page_params if not frame_path else _unique(page_params + query_params(rec.get("frame_url", "")))
+            finding = self.score(rec, in_hidden_frame, params)
             if finding:
                 finding["page_url"] = page["url"]
                 results.append(finding)
@@ -108,7 +125,8 @@ class Detector:
 
         return _drop_descendants(results)
 
-    def score(self, rec: dict, in_hidden_frame: bool = False) -> dict | None:
+    def score(self, rec: dict, in_hidden_frame: bool = False,
+              params: list[tuple[str, str]] | None = None) -> dict | None:
         text = rec.get("content", "")
         evidence = []
         categories = []
@@ -145,7 +163,15 @@ class Detector:
         if has_contact(text):
             evidence.append(_ev("contact", "연락처·메신저 ID 포함", POINTS_CONTACT))
 
-        return self._finding(rec, evidence, categories or ["기타"], "")
+        reflected = reflected_params(params or [], text)
+        if reflected:
+            names = ", ".join(f"{p['name']}={p['value']}" for p in reflected)
+            evidence.append(_ev("reflection", f"URL 파라미터 반사 ({names})", POINTS_REFLECTION))
+
+        finding = self._finding(rec, evidence, categories or ["기타"], "")
+        if finding:
+            finding["reflected_params"] = reflected
+        return finding
 
     def _finding(self, rec: dict, evidence: list[dict], categories: list[str], page_url: str) -> dict | None:
         cfg = self.config
@@ -153,10 +179,21 @@ class Detector:
         if len(evidence) < cfg.min_evidence or score < cfg.suspect_score:
             return None
         level = HIGH if score >= cfg.high_score else SUSPECT
+        kinds = {e["kind"] for e in evidence}
+        if "reflection" in kinds:
+            pattern = REFLECTION
+        elif "redirect" in kinds:
+            pattern = REDIRECT
+        elif "hidden" in kinds:
+            pattern = HIDDEN
+        else:
+            pattern = VISIBLE
         return {
             "level": level,
             "level_label": LEVEL_LABELS[level],
             "score": score,
+            "pattern": pattern,
+            "pattern_label": PATTERN_LABELS[pattern],
             "category": Counter(categories).most_common(1)[0][0],
             "type": rec["type"],
             "content": rec.get("content", ""),
@@ -167,8 +204,13 @@ class Detector:
             "hidden_reasons": rec.get("hidden_reasons", []),
             "rect": rec.get("rect"),
             "evidence": evidence,
+            "reflected_params": [],
             "page_url": page_url,
         }
+
+
+def _unique(params: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    return list(dict.fromkeys(params))
 
 
 def _ev(kind: str, label: str, points: int) -> dict:

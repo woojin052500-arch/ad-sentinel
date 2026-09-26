@@ -35,16 +35,19 @@ ad-sentinel/
 │   ├── detector/              # [2단계] 탐지·분류
 │   │   ├── detector.py        #   근거별 점수 합산, 판정, 페이지 간 묶기
 │   │   ├── keywords.py        #   분야별 키워드 사전 (단어 경계·난독화 대응)
-│   │   └── domains.py         #   정상 도메인 화이트리스트, 의심 도메인 판별
+│   │   ├── domains.py         #   정상 도메인 화이트리스트, 의심 도메인 판별
+│   │   └── reflection.py      #   URL 파라미터 반사 판별 (UTF-8·EUC-KR 디코딩)
 │   └── gui/                   # [3단계] GUI (예정)
 ├── tests/
 │   ├── fixtures/mois_sample.json  # 행정안전부 누리집 실제 크롤링 결과 일부 (오탐 회귀 테스트)
+│   ├── fixtures/reflect/      # 주소 파라미터를 화면에 그대로 출력하는 페이지 (파라미터 반사형 스팸 재현)
 │   ├── fixtures/site/         # 불법광고가 숨겨진 샘플 사이트 (테스트·시연용)
 │   ├── test_url_utils.py
 │   ├── fixtures/heavy/        # 요소 1만 개 이상 페이지, 응답 없는 iframe (성능·제한 시간 테스트)
 │   ├── test_crawler.py
 │   ├── test_heavy.py
-│   └── test_detector.py
+│   ├── test_detector.py
+│   └── test_reflection.py
 ├── packaging/                 # [4단계] PyInstaller 설정 (예정)
 └── docs/                      # [5단계] 매뉴얼·사용설명서·기획서 (예정)
 ```
@@ -63,6 +66,15 @@ python main.py --from-json output/crawl_20260926_185056.json   # 기존 크롤�
 
 주요 옵션: `--max-pages`, `--depth`, `--delay`, `--page-timeout`, `--out`, `--report`, `--whitelist <도메인...>`, `--same-host-only`,
 `--ignore-robots`, `--show-browser`, `--browser <브라우저 경로>`
+
+### robots.txt 무시 (`--ignore-robots`, GUI: "내가 관리하는 사이트 점검")
+
+기본값은 robots.txt 준수입니다. 켜면 실행 시 아래 경고를 표시하고, 결과 JSON의 `meta.robots_ignored`에 `true`로 기록합니다.
+
+> robots.txt 제한을 무시하고 수집합니다. 본인이 관리하거나 점검 권한을 받은 사이트에만 사용하세요.
+> 권한 없이 사용하면 사이트 운영 정책 위반이나 법적 문제가 될 수 있습니다.
+
+문구는 `ad_sentinel/config.py`의 `OWN_SITE_LABEL`, `ROBOTS_IGNORE_WARNING`에 있으며 GUI에서도 같은 문구를 씁니다.
 
 크롤링 결과는 `output/crawl_날짜_시간.json`, 탐지 결과는 `output/detect_날짜_시간.json`에 저장됩니다.
 
@@ -106,8 +118,9 @@ python main.py --from-json output/crawl_20260926_185056.json   # 기존 크롤�
 | 숨김 처리 | 2 | 숨김 요소, 숨겨진 iframe 내부 |
 | 화이트리스트 밖 외부 도메인 | 1 | 링크·iframe 주소 |
 | 연락처·메신저 ID | 1 | 텔레그램 ID, 010 번호 |
+| URL 파라미터 반사 | 2 | 주소의 `?play=바카라분석` 값이 화면·제목에 그대로 출력됨 |
 
-숨김·외부 도메인·연락처는 키워드나 의심 도메인이 있을 때만 더합니다. 그래서 스크린리더용 문구, 메뉴, 빈 요소처럼
+숨김·외부 도메인·연락처·파라미터 반사는 키워드나 의심 도메인이 있을 때만 더합니다. 그래서 스크린리더용 문구, 메뉴, 빈 요소처럼
 광고 내용이 없는 숨김 요소는 결과에 나오지 않습니다.
 
 - **단어 경계**: 약한 키워드(성인, 토토, 슬롯, 오피)는 앞에 한글이 붙어 있으면 제외합니다. 예: "웹 접근성인증"
@@ -116,6 +129,21 @@ python main.py --from-json output/crawl_20260926_185056.json   # 기존 크롤�
   `whitelist.txt`를 두면 한 줄에 도메인 하나씩 추가할 수 있습니다.
 - **페이지 간 묶기**: 같은 프레임 경로·선택자·내용은 한 건으로 묶고 `"3개 페이지에서 발견"`처럼 표시합니다.
   숨김 요소 안의 링크처럼 이미 찾은 요소의 하위 요소는 따로 표시하지 않습니다.
+
+### 탐지 유형 (`pattern`)
+
+| 유형 | 조건 |
+|---|---|
+| URL 파라미터 반사 | 반사 근거가 있음. `reflected_params`에 반사된 파라미터 이름과 값 표시 |
+| 자동 이동 | meta refresh 또는 다른 사이트로 이동 |
+| 숨김 광고 | 숨김 근거가 있음 |
+| 노출 광고 | 그 밖의 경우 |
+
+**URL 파라미터 반사**: 주소 파라미터를 화면에 그대로 출력하는 페이지를 악용한 스팸입니다.
+예: `http://old.gongdan.go.kr/home.jsp?play=바카라분석`. 페이지 주소의 쿼리 파라미터 값(UTF-8, 실패 시 EUC-KR로 해석)이
+요소 내용이나 페이지 제목에 들어 있고, **그 값 자체에 광고 키워드나 의심 도메인이 있을 때만** 근거로 인정합니다.
+`?menu=공지사항`, `?q=주민등록`처럼 평범한 값의 반사는 무시합니다. 검색 페이지가 `?q=카지노 규제`를 출력하는 것처럼
+의도가 정상이어도 구조가 같으면 탐지됩니다. 외부에서 같은 방식으로 악용될 수 있는 지점이기 때문입니다.
 
 ### 실제 사이트 검증 (www.mois.go.kr, 10페이지)
 
@@ -135,6 +163,7 @@ python -m pytest
 `test_crawler.py`는 `tests/fixtures/site`를 로컬 서버로 띄워 실제 브라우저로 크롤링합니다.
 `test_heavy.py`는 요소가 1만 개 넘는 페이지와 응답 없는 iframe에서 제한 시간 안에 끝나는지 검증합니다.
 `test_detector.py`는 실제 mois 결과(`mois_sample.json`)의 오탐 사례가 광고로 판정되지 않는지, 숨긴 광고는 찾는지 검증합니다.
+`test_reflection.py`는 파라미터 반사형 스팸 페이지를 크롤링해 `URL 파라미터 반사` 유형으로 분류되는지 검증합니다.
 
 ## 크롤링 결과 JSON 형식
 
