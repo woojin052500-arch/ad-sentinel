@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="utf-8"><title>자유게시판</title></head>
+<body>
+  <h2>자유게시판</h2>
+  <div id="list"></div>
+  <script>
+    // 자바스크립트로 나중에 그려지는 댓글 (동적 렌더링 테스트)
+    setTimeout(function () {
+      document.getElementById('list').innerHTML =
+        '<p class="dyn">스포츠 베팅 <a href="http://bet.invalid/">바로가기</a></p>';
+    }, 300);
+  </script>
+</body>
+</html>

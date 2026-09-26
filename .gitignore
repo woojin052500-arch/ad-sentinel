@@ -1,0 +1,15 @@
+# 파이썬 캐시
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 가상환경
+.venv/
+venv/
+
+# PyInstaller 산출물 (4단계에서 사용, .spec 파일은 커밋함)
+build/
+dist/
+
+# 크롤링/탐지 결과
+output/

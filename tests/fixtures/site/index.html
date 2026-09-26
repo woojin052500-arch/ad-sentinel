@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="utf-8"><title>테스트 기관 홈페이지</title></head>
+<body style="background:#ffffff">
+  <header id="header">
+    <h1>테스트 기관</h1>
+    <nav>
+      <a href="page2.html">공지사항</a>
+      <a href="board.html?nttId=1#comments">자유게시판</a>
+      <a href="private/secret.html">관리자</a>
+      <a href="https://external.example.com/">외부 사이트</a>
+      <a href="files/report.pdf">보고서 PDF</a>
+      <a href="javascript:void(0)">메뉴 열기</a>
+    </nav>
+  </header>
+
+  <main id="content">
+    <p>정상적인 기관 소개 문구입니다.</p>
+
+    <!-- 숨김 1: display:none -->
+    <div class="ad1" style="display:none">
+      <a href="http://casino.invalid/">온라인 카지노 바로가기</a>
+    </div>
+
+    <!-- 숨김 2: 글자색 = 배경색 -->
+    <span class="ad2" style="color:#fefefe">토토사이트 추천</span>
+
+    <!-- 숨김 3: 화면 밖 위치 -->
+    <div class="ad3" style="position:absolute; left:-9999px; top:0">
+      <a href="http://adult.invalid/">성인 무료 영상</a>
+    </div>
+
+    <!-- 숨김 4: 글자 크기 0 -->
+    <p class="ad4" style="font-size:0">바카라 사이트</p>
+
+    <!-- 정상 iframe -->
+    <iframe id="notice-frame" src="frame.html" width="400" height="200" title="공지 프레임"></iframe>
+    <!-- 숨김 5: 1px iframe -->
+    <iframe src="ad-frame.html" width="1" height="1" style="border:0"></iframe>
+  </main>
+</body>
+</html>
