@@ -1,6 +1,7 @@
 import logging
 import queue
 import threading
+import time
 import tkinter as tk
 import webbrowser
 from datetime import datetime
@@ -66,6 +67,11 @@ class App(tk.Tk):
         self.max_depth = tk.IntVar(value=3)
         self.own_site = tk.BooleanVar(value=False)
         self.enter_gate = tk.BooleanVar(value=True)
+        self.sitemap_url = tk.StringVar()
+        self.delay_sec = tk.DoubleVar(value=CrawlConfig.delay_sec)
+        self.page_timeout = tk.IntVar(value=int(CrawlConfig.page_total_timeout_sec))
+        self.show_advanced = tk.BooleanVar(value=False)
+        self.run_started = 0.0
         self.show_detail_log = tk.BooleanVar(value=False)
         self.list_info = tk.StringVar(value="불러온 목록 없음")
         self.status = tk.StringVar(value="점검할 사이트 주소를 입력하고 [점검 시작]을 누르세요.")
@@ -126,6 +132,12 @@ class App(tk.Tk):
                         text="첫 화면의 '입장' 버튼 자동 클릭 (입장해야 본 화면이 나오는 사이트용, "
                              "로그인·가입·결제·삭제·신고 버튼은 누르지 않음)").grid(
             row=3, column=0, columnspan=2, sticky="w", pady=(pad, 0))
+        ttk.Label(self.site_frame, text="sitemap 또는 RSS 주소 (선택)").grid(
+            row=4, column=0, sticky="w", padx=(0, pad), pady=(pad, 0))
+        ttk.Entry(self.site_frame, textvariable=self.sitemap_url).grid(row=4, column=1, sticky="we", pady=(pad, 0))
+        ttk.Label(self.site_frame, foreground=HINT_COLOR,
+                  text="예: https://www.example.go.kr/all/sitemap.xml · 비워 두면 robots.txt와 흔한 위치"
+                       "(/sitemap.xml, /all/sitemap.xml, /rss 등)를 자동으로 찾습니다.").grid(row=5, column=1, sticky="w")
         self.site_frame.columnconfigure(1, weight=1)
 
         self.list_frame = ttk.Frame(target)
@@ -138,8 +150,22 @@ class App(tk.Tk):
             row=1, column=0, columnspan=2, sticky="w", pady=(pad, 0))
         self.list_frame.columnconfigure(1, weight=1)
 
-        ttk.Checkbutton(target, text=OWN_SITE_LABEL, variable=self.own_site,
-                        command=self._on_own_site).pack(anchor="w", side="bottom", pady=(pad, 0))
+        bottom_row = ttk.Frame(target)
+        bottom_row.pack(fill="x", side="bottom", pady=(pad, 0))
+        ttk.Checkbutton(bottom_row, text=OWN_SITE_LABEL, variable=self.own_site,
+                        command=self._on_own_site).pack(side="left")
+        ttk.Checkbutton(bottom_row, text="고급 설정", variable=self.show_advanced,
+                        command=self._toggle_advanced).pack(side="left", padx=(pad * 4, pad))
+        self.advanced_frame = ttk.Frame(bottom_row)
+        ttk.Label(self.advanced_frame, text="요청 간격").pack(side="left")
+        ttk.Spinbox(self.advanced_frame, from_=0, to=30, increment=0.5, textvariable=self.delay_sec,
+                    width=5).pack(side="left", padx=pad)
+        ttk.Label(self.advanced_frame, text="초").pack(side="left")
+        ttk.Label(self.advanced_frame, text="페이지당 제한 시간").pack(side="left", padx=(pad * 3, 0))
+        ttk.Spinbox(self.advanced_frame, from_=10, to=600, increment=10, textvariable=self.page_timeout,
+                    width=5).pack(side="left", padx=pad)
+        ttk.Label(self.advanced_frame, text="초").pack(side="left")
+        ttk.Label(self.advanced_frame, foreground=HINT_COLOR, text="  (차단되면 간격을 자동으로 늘림)").pack(side="left")
 
         buttons = ttk.Frame(root)
         buttons.pack(fill="x", pady=pad)
@@ -260,8 +286,20 @@ class App(tk.Tk):
         self.list_info.set(f"불러온 주소 {len(urls)}개 - {Path(path).name}")
         self._say(f"목록 파일 {Path(path).name}에서 주소 {len(urls)}개를 불러왔습니다.")
 
+    def _toggle_advanced(self):
+        if self.show_advanced.get():
+            self.advanced_frame.pack(side="left")
+        else:
+            self.advanced_frame.pack_forget()
+
     def _make_config(self) -> CrawlConfig | None:
-        common = dict(respect_robots=not self.own_site.get())
+        try:
+            delay, timeout = float(self.delay_sec.get()), float(self.page_timeout.get())
+        except (tk.TclError, ValueError):
+            messagebox.showwarning("입력 오류", "요청 간격과 페이지당 제한 시간은 숫자로 입력하세요.")
+            return None
+        common = dict(respect_robots=not self.own_site.get(), delay_sec=max(0.0, delay),
+                      page_total_timeout_sec=max(10.0, timeout), enter_gate=self.enter_gate.get())
         if self.mode.get() == LIST:
             if not self.url_list:
                 messagebox.showwarning("목록 없음", "먼저 [목록 파일 불러오기]로 점검할 주소 목록을 불러오세요.")
@@ -279,8 +317,9 @@ class App(tk.Tk):
         except (tk.TclError, ValueError):
             messagebox.showwarning("입력 오류", "최대 페이지 수와 링크 깊이는 숫자로 입력하세요.")
             return None
+        sitemaps = [u.strip() for u in self.sitemap_url.get().replace(",", " ").split() if u.strip()]
         return CrawlConfig(start_url=url, max_pages=max(1, max_pages), max_depth=max(0, max_depth),
-                           enter_gate=self.enter_gate.get(), **common)
+                           sitemap_urls=sitemaps, **common)
 
     def _start(self):
         if self.worker and self.worker.is_alive():
@@ -295,6 +334,7 @@ class App(tk.Tk):
         self.progress.configure(maximum=total, value=0)
         self.count_text.set(f"0 / {total}")
         self.status.set("브라우저를 준비하고 있습니다...")
+        self.run_started = time.monotonic()
         if config.url_list:
             self._say(f"점검을 시작합니다. (URL 목록 점검 · 주소 {total}개)")
         else:
@@ -353,7 +393,7 @@ class App(tk.Tk):
         elif kind == "progress":
             _, done, total, url = event
             self.progress.configure(maximum=max(total, 1), value=done)
-            self.count_text.set(f"{done} / {total}")
+            self.count_text.set(f"{done} / {total}" + _eta_text(done, total, time.monotonic() - self.run_started))
             if url and not self.stop_event.is_set():
                 self.status.set(f"점검 중 ({done + 1}번째 페이지): {display_url(url)[:90]}")
         elif kind == "page":
@@ -422,6 +462,8 @@ class App(tk.Tk):
         self.table.delete(*self.table.get_children())
         for f in report["findings"]:
             content = " ".join(f["content"].split())[:120]
+            if f.get("post_title"):
+                content += f"  (글: {f['post_title'][:40]})"
             self.table.insert("", "end", iid=str(f["id"]), tags=(f["level"],), values=(
                 f["level_label"], f["pattern_label"], f["category"], f["score"], content, f"{f['page_count']}개"))
         s = report["summary"]
@@ -492,6 +534,8 @@ class App(tk.Tk):
         if f.get("advice"):
             parts += [("label", "조치 안내\n"), ("advice", f["advice"] + "\n")]
         parts += [("label", "내용\n"), ("", f["content"] + "\n")]
+        if f.get("post_title"):
+            parts += [("label", "게시글 제목\n"), ("", f["post_title"] + "\n")]
         if f.get("reflected_params"):
             parts += [("label", "반사된 파라미터\n"), ("", reflected_text(f) + "\n")]
         parts += [("label", f"발견 페이지 ({f['page_count']}개)\n"),
@@ -609,6 +653,19 @@ class App(tk.Tk):
             self.stop_event.set()
         logging.getLogger("ad_sentinel").removeHandler(self.log_handler)
         self.destroy()
+
+
+def _eta_text(done: int, total: int, elapsed: float) -> str:
+    if done <= 0 or total <= done or elapsed <= 0:
+        return ""
+    remaining = int((total - done) * elapsed / done)
+    minutes, seconds = divmod(remaining, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f" · 남은 시간 약 {hours}시간 {minutes}분"
+    if minutes:
+        return f" · 남은 시간 약 {minutes}분 {seconds}초"
+    return f" · 남은 시간 약 {seconds}초"
 
 
 def _page_message(index: int, page: dict, findings: int, unchecked: int) -> str:

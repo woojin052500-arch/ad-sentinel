@@ -45,6 +45,29 @@ EXTRACT_JS = r"""
     const PRIORITY = new Set(['hidden', 'iframe', 'redirect']);
     let priorityCount = 0, normalCount = 0;
 
+    const ITEM_SEL = 'article, li, [class*=post i], [class*=item i], [class*=card i], [class*=article i], ' +
+                     '[class*=entry i], [class*=comment i]';
+    const TITLE_SEL = 'h1, h2, h3, h4, h5, [class*=title i], [class*=subject i]';
+    const titleCache = new Map();
+    function contextTitle(el) {
+        let item = el.closest(ITEM_SEL);
+        for (let depth = 0; item && depth < 4; depth++) {
+            if (!titleCache.has(item)) {
+                const h = item.querySelector(TITLE_SEL);
+                titleCache.set(item, h ? (h.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80) : '');
+            }
+            const t = titleCache.get(item);
+            if (t) return t;
+            item = item.parentElement ? item.parentElement.closest(ITEM_SEL) : null;
+        }
+        return '';
+    }
+
+    function pushEl(el, rec) {
+        try { rec.context_title = contextTitle(el); } catch (e) { rec.context_title = ''; }
+        push(rec);
+    }
+
     function push(rec) {
         if (PRIORITY.has(rec.type)) {
             if (priorityCount >= MAX_RECORDS) { truncated = true; return; }
@@ -266,14 +289,14 @@ EXTRACT_JS = r"""
 
         if (parentHidden) {
             hiddenOf.set(el, true);
-            if (nav) push(navRecord(el, nav, true, null));
+            if (nav) pushEl(el, navRecord(el, nav, true, null));
             if (isLink) {
-                push({ type: 'link', selector: cssSelector(el), href: el.href,
+                pushEl(el, { type: 'link', selector: cssSelector(el), href: el.href,
                        raw_href: el.getAttribute('href'), content: clip(el.textContent || el.title || ''),
                        target: el.getAttribute('target') || '', hidden: true, footer: inFooter(el), rect: null });
             }
             if (isFrame) {
-                push({ type: 'iframe', selector: cssSelector(el), src: el.src || '',
+                pushEl(el, { type: 'iframe', selector: cssSelector(el), src: el.src || '',
                        raw_src: el.getAttribute('src') || '', content: clip(el.title || el.name || ''),
                        hidden: true, hidden_reasons: ['inside-hidden-element'], rect: null });
             }
@@ -294,7 +317,7 @@ EXTRACT_JS = r"""
             const links = linksInside(el);
             if (isLink) links.unshift(el.href);
             if (content || links.length || el.querySelector('iframe, img')) {
-                push({ type: 'hidden', tag: tag.toLowerCase(), selector: cssSelector(el),
+                pushEl(el, { type: 'hidden', tag: tag.toLowerCase(), selector: cssSelector(el),
                        content, hidden_reasons: reasons, links, rect: rectOf(r) });
             }
         }
@@ -305,18 +328,18 @@ EXTRACT_JS = r"""
                 const img = el.querySelector('img');
                 label = img ? img.alt : '';
             }
-            push({ type: 'link', selector: cssSelector(el), href: el.href,
+            pushEl(el, { type: 'link', selector: cssSelector(el), href: el.href,
                    raw_href: el.getAttribute('href'), content: clip(label),
                    target: el.getAttribute('target') || '', hidden: selfHidden, footer: inFooter(el),
                    rect: rectOf(r) });
         }
 
-        if (nav) push(navRecord(el, nav, selfHidden, r));
+        if (nav) pushEl(el, navRecord(el, nav, selfHidden, r));
 
         if (isFrame) {
             const fr = selfHidden ? reasons.slice() : [];
             if (st.display !== 'none' && (r.width <= 2 || r.height <= 2)) fr.push('tiny-size');
-            push({ type: 'iframe', selector: cssSelector(el), src: el.src || '',
+            pushEl(el, { type: 'iframe', selector: cssSelector(el), src: el.src || '',
                    raw_src: el.getAttribute('src') || '', content: clip(el.title || el.name || ''),
                    hidden: fr.length > 0, hidden_reasons: fr, rect: rectOf(r) });
         }
@@ -327,7 +350,7 @@ EXTRACT_JS = r"""
                 const full = el.textContent;
                 if (full.length <= MAX_TEXT * 2) content = clip(el.innerText || full);
             }
-            push({ type: 'text', tag: tag.toLowerCase(), selector: cssSelector(el),
+            pushEl(el, { type: 'text', tag: tag.toLowerCase(), selector: cssSelector(el),
                    content, rect: rectOf(r) });
         }
     }

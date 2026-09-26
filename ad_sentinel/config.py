@@ -23,7 +23,10 @@ class CrawlConfig:
     extract_time_budget_ms: int = 10000
     max_frames_per_page: int = 20
     max_scan_elements: int = 20000
-    delay_sec: float = 0.5
+    delay_sec: float = 1.0
+    throttle_backoff_min_sec: float = 2.0
+    throttle_max_delay_sec: float = 30.0
+    throttle_max_consecutive: int = 3
     enter_gate: bool = True
     gate_link_threshold: int = 3
     gate_wait_ms: int = 20000
@@ -31,7 +34,8 @@ class CrawlConfig:
     load_more_max_clicks: int = 30
     load_more_timeout_sec: float = 90.0
     use_sitemap: bool = True
-    max_sitemap_urls: int = 2000
+    sitemap_urls: list[str] = field(default_factory=list)
+    max_sitemap_urls: int = 5000
     respect_robots: bool = True
     max_elements_per_frame: int = 3000
     max_text_len: int = 500

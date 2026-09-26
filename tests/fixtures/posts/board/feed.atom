@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"><title>게시판</title>
+  <entry><title>글 제목 13</title><link rel="alternate" href="/post/13"/></entry>
+  <entry><title>글 제목 14</title><link rel="alternate" href="/post/14"/></entry>
+  <entry><title>글 제목 15</title><link rel="alternate" href="/post/15"/></entry>
+</feed>

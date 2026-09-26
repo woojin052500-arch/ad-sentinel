@@ -200,3 +200,14 @@ def test_wonjo_gyoje_is_adult_keyword_but_single_keyword_is_not_ad():
     assert [k.word for k in find_keywords("양파 원조교제하다")] == ["원조교제"]
     assert _score(_rec("text", "양파 원조교제하다")) is None
     assert _score(_rec("text", "원조교제 조건만남 텔레그램 @abc123"))["level"] == HIGH
+
+
+def test_hidden_ad_inside_comment_is_not_masked_by_comment_text():
+    comment = _rec("text", "좋은 글이네요", selector="#post > ul > li")
+    hidden = _rec("hidden", "카지노 먹튀검증 바로가기", selector="#post > ul > li > div",
+                  hidden_reasons=["display:none"], links=["http://casino.invalid/"])
+    link = _rec("link", "카지노 먹튀검증 바로가기", selector="#post > ul > li > div > a",
+                hidden=True, href="http://casino.invalid/")
+    result = detect(_crawl(_page(START, comment, hidden, link)))
+    assert [f["content"] for f in result["findings"]] == ["카지노 먹튀검증 바로가기"]
+    assert result["findings"][0]["selector"] == "#post > ul > li > div"

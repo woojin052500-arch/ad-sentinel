@@ -201,7 +201,7 @@ class Detector:
 
         child_links: dict[tuple, list[str]] = defaultdict(list)
         for e in elements:
-            if e["type"] == "link" and e.get("href"):
+            if e["type"] == "link" and e.get("href") and not e.get("hidden"):
                 parts = e["selector"].split(" > ")
                 for i in range(1, len(parts)):
                     key = (tuple(e.get("frame_path", [])), " > ".join(parts[:i]))
@@ -223,6 +223,8 @@ class Detector:
             finding = self.score(rec, in_hidden_frame, params)
             if finding:
                 finding["page_url"] = page["url"]
+                finding["page_title"] = page.get("listed_title") or page.get("title") or ""
+                finding["post_title"] = finding["context_title"] or page.get("listed_title") or ""
                 results.append(finding)
 
         if page.get("offsite_redirect") and page.get("final_url") and not self.is_trusted(page["final_url"]):
@@ -329,6 +331,7 @@ class Detector:
             "selector": rec.get("selector", ""),
             "frame_path": rec.get("frame_path", []),
             "frame_url": rec.get("frame_url", ""),
+            "context_title": rec.get("context_title", ""),
             "urls": _urls_of(rec),
             "hidden_reasons": rec.get("hidden_reasons", []),
             "rect": rec.get("rect"),
@@ -370,15 +373,17 @@ def _urls_of(rec: dict) -> list[str]:
     return [u for u in dict.fromkeys(urls) if u.startswith("http")]
 
 
+def _is_inside(child: dict, parent: dict) -> bool:
+    return (child is not parent and child["frame_path"] == parent["frame_path"] and bool(parent["selector"])
+            and child["selector"].startswith(parent["selector"] + " > "))
+
+
 def _drop_descendants(findings: list[dict]) -> list[dict]:
     kept = []
     for f in findings:
-        prefix_of = [
-            g for g in findings
-            if g is not f and g["frame_path"] == f["frame_path"] and g["selector"]
-            and f["selector"].startswith(g["selector"] + " > ")
-        ]
-        if not prefix_of:
+        covered_by_parent = any(_is_inside(f, g) and g["score"] >= f["score"] for g in findings)
+        covers_stronger_child = any(_is_inside(g, f) and g["score"] > f["score"] for g in findings)
+        if not covered_by_parent and not covers_stronger_child:
             kept.append(f)
     return kept
 

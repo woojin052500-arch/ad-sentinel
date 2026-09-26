@@ -11,6 +11,7 @@ CSV_COLUMNS = [
     ("분류", lambda f: f["category"]),
     ("점수", lambda f: f["score"]),
     ("내용", lambda f: f["content"]),
+    ("게시글 제목", lambda f: f.get("post_title", "")),
     ("발견 페이지 수", lambda f: f["page_count"]),
     ("페이지 주소", lambda f: "\n".join(f["pages"])),
     ("위치(선택자)", lambda f: location_text(f)),
@@ -112,6 +113,8 @@ def export_html(report: dict, path: str | Path) -> Path:
             pages += f"<li>외 {len(f['pages']) - 20}개</li>"
         evidence = "".join(f"<li>{e(ev['label'])} (+{ev['points']})</li>" for ev in f["evidence"])
         extra = []
+        if f.get("post_title"):
+            extra.append(f"게시글: {e(f['post_title'])}")
         if f.get("hidden_reasons"):
             extra.append(f"숨김 이유: {e(', '.join(f['hidden_reasons']))}")
         if f.get("reflected_params"):

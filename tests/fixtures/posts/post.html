@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="utf-8"><title>익명 토론 - 자유로운 토론</title><script src="/gate.js"></script></head>
+<body>
+  <div id="app"></div>
+  <script>
+    var no = parseInt(location.pathname.split('/').pop(), 10);
+    landing(function () {
+      var comment = no === 7
+        ? '좋은 글이네요<div style="display:none"><a href="http://casino.invalid/">카지노 먹튀검증 바로가기</a></div>'
+        : '좋은 글이네요';
+      document.getElementById('app').innerHTML =
+        '<article class="post"><h2 class="title">글 제목 ' + no + '</h2>' +
+        '<div class="body">글 번호 ' + no + '의 본문입니다. 오늘 있었던 일을 자세히 적어 봅니다.</div>' +
+        '<ul class="comments"><li class="comment">' + comment + '</li></ul></article>' +
+        '<div class="sheet" style="position:fixed;bottom:0;left:0;right:0;background:#eef">' +
+        '약관에 동의하는 것으로 간주됩니다. <button onclick="clickLog(\'agree\')">동의</button></div>';
+    });
+    footer();
+  </script>
+</body>
+</html>

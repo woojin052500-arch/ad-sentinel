@@ -17,13 +17,15 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--max-pages", type=int, default=30, help="최대 방문 페이지 수 (기본 30)")
     p.add_argument("--depth", type=int, default=3, help="링크를 따라갈 최대 깊이 (기본 3)")
     p.add_argument("--page-timeout", type=float, default=60, help="페이지 하나의 전체 제한 시간(초) (기본 60)")
-    p.add_argument("--delay", type=float, default=0.5, help="페이지 사이 대기 시간(초) (기본 0.5)")
+    p.add_argument("--delay", type=float, default=1.0, help="페이지 사이 요청 간격(초) (기본 1.0, 차단 시 자동으로 늘어남)")
     p.add_argument("--out", default=None, help="크롤링 결과 JSON 경로 (기본: output/crawl_날짜_시간.json)")
     p.add_argument("--report", default=None, help="탐지 결과 JSON 경로 (기본: output/detect_날짜_시간.json)")
     p.add_argument("--whitelist", nargs="*", default=[], help="추가로 신뢰할 도메인 (예: example.com)")
     p.add_argument("--same-host-only", action="store_true", help="하위 도메인은 탐색하지 않음")
     p.add_argument("--no-gate", action="store_true", help="첫 화면의 '입장' 버튼을 자동으로 누르지 않음")
-    p.add_argument("--no-sitemap", action="store_true", help="sitemap.xml을 읽지 않음")
+    p.add_argument("--no-sitemap", action="store_true", help="sitemap.xml·RSS를 자동으로 찾지 않음")
+    p.add_argument("--sitemap", action="append", default=[], metavar="URL",
+                   help="sitemap 또는 RSS/Atom 주소 직접 지정 (여러 번 사용 가능)")
     p.add_argument("--ignore-robots", action="store_true",
                    help="내가 관리하는 사이트 점검: robots.txt 제한을 무시 (권한 있는 사이트에만 사용)")
     p.add_argument("--show-browser", action="store_true", help="브라우저 창을 띄워서 실행")
@@ -48,6 +50,7 @@ def crawl(args) -> dict | None:
         include_subdomains=not args.same_host_only,
         enter_gate=not args.no_gate,
         use_sitemap=not args.no_sitemap,
+        sitemap_urls=args.sitemap,
         respect_robots=not args.ignore_robots,
         headless=not args.show_browser,
         browser_executable=args.browser,
@@ -78,7 +81,8 @@ def print_report(report: dict) -> None:
             print(f"      안내: {f['advice']}")
         if f["reflected_params"]:
             print(f"      반사된 파라미터: {', '.join(p['name'] + '=' + p['value'] for p in f['reflected_params'])}")
-        print(f"      위치: {f['location_label']} | {' > '.join(f['frame_path'] + [f['selector']])}")
+        title = f" | 글: {f['post_title']}" if f.get("post_title") else ""
+        print(f"      위치: {f['location_label']}{title} | {' > '.join(f['frame_path'] + [f['selector']])}")
         print(f"      근거: {', '.join(e['label'] for e in f['evidence'])}")
     unknown = [d["host"] for d in report["external_domains"] if not d["whitelisted"]]
     if unknown:

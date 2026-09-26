@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>익명 토론</title>
+    <item><title>글 제목 1</title><link>/post/1</link></item>
+    <item><title>글 제목 2</title><link>/post/2</link></item>
+    <item><title>글 제목 3</title><link>/post/3</link></item>
+    <item><title>글 제목 4</title><link>/post/4</link></item>
+    <item><title>글 제목 5</title><link>/post/5</link></item>
+    <item><title>글 제목 6</title><link>/post/6</link></item>
+    <item><title>글 제목 7</title><link>/post/7</link></item>
+    <item><title>글 제목 8</title><link>/post/8</link></item>
+    <item><title>글 제목 9</title><link>/post/9</link></item>
+    <item><title>글 제목 10</title><link>/post/10</link></item>
+    <item><title>글 제목 11</title><link>/post/11</link></item>
+    <item><title>글 제목 12</title><link>/post/12</link></item>
+</channel></rss>

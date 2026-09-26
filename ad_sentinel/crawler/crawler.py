@@ -1,9 +1,11 @@
 import logging
+import re
 import threading
 import time
 from collections import deque
 from datetime import datetime
 from typing import Callable
+from urllib.parse import urlsplit
 
 from playwright.sync_api import Error as PlaywrightError, Frame, Page, sync_playwright
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -24,6 +26,9 @@ log = logging.getLogger(__name__)
 notice = logging.getLogger("ad_sentinel.notice")
 
 ProgressCallback = Callable[[int, int, str], None]
+RATE_LIMIT_TEXT = re.compile(
+    r"요청\s*(속도|횟수)?\s*제한|too\s*many\s*requests|rate\s*limit|과도한\s*(요청|접속)|"
+    r"잠시\s*후\s*다시\s*(시도|접속)|접속이\s*(차단|제한)", re.IGNORECASE)
 PageCallback = Callable[[int, dict], None]
 
 USER_AGENT = (
@@ -51,6 +56,10 @@ class Crawler:
         self.robots = RobotsChecker() if config.respect_robots else None
         self.gate_key = ""
         self.content_linked: set[str] = set()
+        self.listed_titles: dict[str, str] = {}
+        self.delay = config.delay_sec
+        self.throttle_streak = 0
+        self.forbidden_streak = 0
 
     def run(self) -> dict:
         cfg = self.config
@@ -76,6 +85,8 @@ class Crawler:
                 "finished_at": None,
                 "stopped_by_user": False,
                 "robots_ignored": not cfg.respect_robots,
+                "stopped_reason": None,
+                "throttle_events": [],
                 "config": vars(cfg).copy(),
             },
             "pages": [],
@@ -101,7 +112,7 @@ class Crawler:
                 bypass_csp=True,
             )
             try:
-                if mode == "site" and cfg.use_sitemap:
+                if mode == "site" and (cfg.use_sitemap or cfg.sitemap_urls):
                     added = self._add_sitemap_urls(context, start_url, queue, seen)
                     result["meta"]["sitemap"] = added
                 while queue and len(result["pages"]) < self.total:
@@ -114,11 +125,19 @@ class Crawler:
                         result["skipped"].append({"url": url, "reason": "robots.txt"})
                         continue
 
-                    self._report(len(result["pages"]), url)
-                    allow_gate = mode == "site" and cfg.enter_gate and (depth == 0 or bool(self.gate_key))
-                    page_result, links = self._crawl_page(context, url, depth, allow_gate)
+                    self._report(len(result["pages"]), url, len(queue))
+                    page_result, links = self._crawl_page(context, url, depth, cfg.enter_gate,
+                                                          first_page=not result["pages"])
+                    reason = self._throttle_reason(page_result, url)
+                    if reason:
+                        if self._handle_throttle(result, url, reason, page_result):
+                            queue.appendleft((url, depth, found_on))
+                            continue
+                        break
+                    self.throttle_streak = 0
                     self.content_linked |= self._content_links(page_result)
                     page_result["found_on"] = found_on
+                    page_result["listed_title"] = self.listed_titles.get(url, "")
                     result["pages"].append(page_result)
                     if self.on_page:
                         self.on_page(len(result["pages"]), page_result)
@@ -132,13 +151,14 @@ class Crawler:
                                 seen.add(link)
                                 queue.append((link, depth + 1, url))
 
-                    if queue and cfg.delay_sec > 0:
-                        time.sleep(cfg.delay_sec)
+                    if queue and self.delay > 0:
+                        self._sleep(self.delay)
             finally:
                 context.close()
                 browser.close()
 
-        self._report(len(result["pages"]), "")
+        self._report(len(result["pages"]), "", 0)
+        result["meta"]["final_delay_sec"] = self.delay
         result["meta"]["gate"] = next((p["gate"] for p in result["pages"] if p.get("gate")), None)
         result["meta"]["notes"] = self._notes(mode, result)
         for note in result["meta"]["notes"]:
@@ -147,12 +167,60 @@ class Crawler:
         result["meta"]["page_count"] = len(result["pages"])
         return result
 
-    def _report(self, done: int, url: str) -> None:
-        log.info("[%d/%d] %s", done, self.total, url or "완료")
+    def _report(self, done: int, url: str, pending: int) -> None:
+        total = min(self.total, done + pending + (1 if url else 0))
+        log.info("[%d/%d] %s", done, total, url or "완료")
         if self.on_progress:
-            self.on_progress(done, self.total, url)
+            self.on_progress(done, total, url)
 
-    def _crawl_page(self, context, url: str, depth: int, allow_gate: bool = False) -> tuple[dict, list[str]]:
+    def _sleep(self, seconds: float) -> None:
+        end = time.monotonic() + seconds
+        while not self.stop_event.is_set() and time.monotonic() < end:
+            time.sleep(min(0.2, max(0.0, end - time.monotonic())))
+
+    def _throttle_reason(self, page_result: dict, url: str) -> str:
+        status = page_result.get("status")
+        if status == 429:
+            return "HTTP 429 요청이 너무 많음"
+        if status == 503 and page_result.get("retry_after"):
+            return "HTTP 503 일시적으로 사용할 수 없음"
+        if status == 403:
+            self.forbidden_streak += 1
+            if self.forbidden_streak >= 3:
+                return "HTTP 403 접근 거부가 연속 3회"
+        else:
+            self.forbidden_streak = 0
+        final = page_result.get("final_url") or ""
+        if final and urlsplit(final).path != urlsplit(url).path:
+            main = next((f for f in page_result["frames"] if f["is_main"]), None)
+            text = (page_result.get("title") or "") + " " + ((main or {}).get("text") or "")[:2000]
+            if RATE_LIMIT_TEXT.search(text):
+                return "요청 제한 안내 페이지로 이동됨"
+        return ""
+
+    def _handle_throttle(self, result: dict, url: str, reason: str, page_result: dict) -> bool:
+        cfg = self.config
+        self.throttle_streak += 1
+        self.delay = min(cfg.throttle_max_delay_sec, max(self.delay * 2, cfg.throttle_backoff_min_sec))
+        wait = self.delay
+        retry_after = page_result.get("retry_after") or ""
+        if retry_after.strip().isdigit():
+            wait = min(cfg.throttle_max_delay_sec * 2, max(wait, float(retry_after.strip())))
+        result["meta"]["throttle_events"].append(
+            {"url": url, "reason": reason, "delay_sec": self.delay, "wait_sec": wait, "at": _now()})
+        if self.throttle_streak >= cfg.throttle_max_consecutive:
+            result["meta"]["stopped_reason"] = "blocked"
+            result["meta"]["blocked_reason"] = reason
+            result["skipped"].append({"url": url, "reason": f"요청 제한({reason})으로 점검 중단"})
+            notice.warning("사이트가 요청을 계속 제한해(%s) 점검을 멈췄습니다.", reason)
+            return False
+        notice.warning("요청이 제한되었습니다(%s). 요청 간격을 %g초로 늘리고 %g초 뒤 다시 시도합니다.",
+                       reason, self.delay, wait)
+        self._sleep(wait)
+        return not self.stop_event.is_set()
+
+    def _crawl_page(self, context, url: str, depth: int, allow_gate: bool = False,
+                    first_page: bool = False) -> tuple[dict, list[str]]:
         cfg = self.config
         page_result = {
             "url": url,
@@ -186,6 +254,7 @@ class Crawler:
                 url, wait_until="domcontentloaded", timeout=max(1, min(cfg.page_timeout_ms, remaining_ms()))
             )
             page_result["status"] = response.status if response else None
+            page_result["retry_after"] = response.headers.get("retry-after", "") if response else ""
             page_result["timings"]["load"] = round(time.monotonic() - t, 2)
             log.info("  로딩 %.2fs (HTTP %s)", page_result["timings"]["load"], page_result["status"])
 
@@ -207,7 +276,7 @@ class Crawler:
             page_result["timings"]["extract"] = round(time.monotonic() - t, 2)
 
             if allow_gate and not page_result["offsite_redirect"] and remaining_ms() > 3000:
-                self._try_gate(page, page_result, url, remaining_ms)
+                self._try_gate(page, page_result, url, remaining_ms, first_page)
 
         except PlaywrightError as e:
             page_result["error"] = str(e).strip().splitlines()[0]
@@ -297,9 +366,10 @@ class Crawler:
         except PlaywrightError:
             return False
 
-    def _try_gate(self, page: Page, page_result: dict, url: str, remaining_ms: Callable[[], int]) -> None:
+    def _try_gate(self, page: Page, page_result: dict, url: str, remaining_ms: Callable[[], int],
+                  first_page: bool = False) -> None:
         cfg = self.config
-        first = not self.gate_key
+        first = first_page and not self.gate_key
         own = {normalize_url(url), page_result["final_url"]}
         links_before = set(self._next_links(page_result)) - own
         content_before = self._content_links(page_result) - own
@@ -313,7 +383,7 @@ class Crawler:
         except PlaywrightError as e:
             log.warning("  입장 버튼 찾기 실패: %s", str(e).strip().splitlines()[0])
             return
-        if first and len(content_before) >= cfg.gate_link_threshold:
+        if not first or len(content_before) >= cfg.gate_link_threshold:
             skipped = [c["text"] for c in candidates or [] if c["weak"]]
             candidates = [c for c in candidates or [] if not c["weak"]]
             if skipped:
@@ -372,7 +442,7 @@ class Crawler:
         self.gate_key = gate["key"]
 
         if cfg.load_more and not page_result["offsite_redirect"]:
-            self._load_more(page, page_result, remaining_ms)
+            self._load_more(page, page_result, remaining_ms, full=first)
 
     def _reextract(self, page: Page, page_result: dict, remaining_ms: Callable[[], int]) -> None:
         old_elements, old_frames = page_result["elements"], page_result["frames"]
@@ -382,17 +452,19 @@ class Crawler:
         keys = {(f["frame_url"], tuple(f["frame_path"])) for f in page_result["frames"]}
         page_result["frames"] += [f for f in old_frames if (f["frame_url"], tuple(f["frame_path"])) not in keys]
 
-    def _load_more(self, page: Page, page_result: dict, remaining_ms: Callable[[], int]) -> None:
+    def _load_more(self, page: Page, page_result: dict, remaining_ms: Callable[[], int], full: bool = True) -> None:
         cfg = self.config
-        self._deadline = max(self._deadline, time.monotonic() + cfg.load_more_timeout_sec + 15)
-        stop_at = time.monotonic() + cfg.load_more_timeout_sec
+        budget = cfg.load_more_timeout_sec if full else min(15.0, cfg.load_more_timeout_sec)
+        max_steps = cfg.load_more_max_clicks if full else min(3, cfg.load_more_max_clicks)
+        self._deadline = max(self._deadline, time.monotonic() + budget + 15)
+        stop_at = time.monotonic() + budget
         start_url = page.url
         options = {"dangerWords": DANGER_WORDS}
         clicks, scrolls, misses, reveal = 0, 0, 0, 0
         first_metrics = self._metrics(page, remaining_ms())
         if not first_metrics:
             return
-        while clicks + scrolls < cfg.load_more_max_clicks and time.monotonic() < stop_at and remaining_ms() > 3000:
+        while clicks + scrolls < max_steps and time.monotonic() < stop_at and remaining_ms() > 3000:
             if self.stop_event.is_set():
                 break
             before = self._metrics(page, remaining_ms())
@@ -407,6 +479,8 @@ class Crawler:
                 if not self._click_js(page, "[data-ad-sentinel-more='1']", remaining_ms()):
                     break
                 action = "click"
+            elif not full:
+                break
             else:
                 try:
                     self._evaluate(page.main_frame, "() => window.scrollTo(0, document.documentElement.scrollHeight)",
@@ -442,8 +516,8 @@ class Crawler:
             parts = [f"더보기 {clicks}회 클릭"] if clicks else []
             if scrolls:
                 parts.append(f"스크롤 추가 로딩 {scrolls}회")
-            notice.info("%s, 게시글 영역 추가 수집 (화면 글자 %d자 → %d자)", "·".join(parts),
-                        first_metrics["text"], last["text"])
+            (notice.info if full else log.info)("%s, 게시글 영역 추가 수집 (화면 글자 %d자 → %d자)",
+                                                 "·".join(parts), first_metrics["text"], last["text"])
 
     def _click_js(self, page: Page, selector: str, timeout_ms: int) -> bool:
         try:
@@ -453,29 +527,50 @@ class Crawler:
 
     def _add_sitemap_urls(self, context, start_url: str, queue: deque, seen: set) -> dict:
         cfg = self.config
+        explicit = list(cfg.sitemap_urls)
         try:
-            urls, files = sitemap.discover(context.request, start_url, cfg.max_sitemap_urls)
+            found = sitemap.discover(context.request, start_url, cfg.max_sitemap_urls, explicit=explicit)
         except Exception as e:
-            log.warning("sitemap 읽기 실패: %s", e)
-            return {"files": [], "urls": 0}
+            log.warning("sitemap·RSS 읽기 실패: %s", e)
+            return {"files": [], "sources": [], "urls": 0}
+        if not cfg.use_sitemap:
+            found.sources = [s for s in found.sources if s["source"] == "지정"]
         added = 0
-        for raw in urls:
+        for raw in found.pages:
             u = normalize_url(raw)
-            if (u and u not in seen and is_crawlable(u) and is_safe_to_visit(u)
+            if not u:
+                continue
+            if found.titles.get(raw):
+                self.listed_titles.setdefault(u, found.titles[raw])
+            if (u not in seen and is_crawlable(u) and is_safe_to_visit(u)
                     and is_same_site(u, start_url, cfg.include_subdomains)):
                 seen.add(u)
                 queue.append((u, 1, "sitemap.xml"))
                 added += 1
-        if files:
-            notice.info("sitemap.xml에서 주소 %d개를 찾아 점검 목록에 추가했습니다.", added)
+        for src in explicit:
+            if not any(s["source"] == "지정" for s in found.sources):
+                notice.warning("지정한 sitemap·RSS 주소를 읽지 못했습니다: %s", src)
+                break
+        info = {"files": [s["url"] for s in found.sources], "sources": found.sources, "urls": added}
+        if found.sources:
+            detail = ", ".join(f"{urlsplit(s['url']).path or '/'} {s['urls']}개" for s in found.sources if s["urls"])
+            notice.info("sitemap·RSS에서 주소 %d개를 찾아 점검 목록에 추가했습니다. (%s)", added, detail or "새 주소 없음")
+            capacity = max(0, self.total - 1)
+            if added > capacity:
+                info["limited_to"] = capacity
+                notice.info("sitemap 주소 %d개 중 %d개만 점검합니다. (최대 페이지 수 %d 설정, 모두 점검하려면 늘리세요)",
+                            added, capacity, self.total)
         else:
-            log.info("sitemap.xml 없음")
-        return {"files": files, "urls": added}
+            log.info("sitemap·RSS 없음")
+        return info
 
     def _notes(self, mode: str, result: dict) -> list[str]:
         cfg = self.config
         pages = result["pages"]
         checked = len(pages)
+        if result["meta"].get("stopped_reason") == "blocked":
+            return [f"사이트가 요청을 계속 제한해({result['meta']['blocked_reason']}) {checked}페이지까지만 점검하고 멈췄습니다. "
+                    f"고급 설정에서 요청 간격을 늘리거나(현재 {self.delay:g}초) 잠시 뒤 다시 점검해 보세요."]
         if mode != "site" or result["meta"]["stopped_by_user"] or not pages:
             return []
         linked = [p for p in pages[1:] if {p["url"], p.get("final_url")} & self.content_linked]
