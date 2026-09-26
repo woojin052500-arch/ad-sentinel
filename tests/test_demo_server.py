@@ -6,6 +6,7 @@ def test_demo_paths_map_to_fixtures():
     handler.directory = str(demo_server.SITE_DIR)
     assert handler.translate_path("/old/home.html?play=x").endswith("reflect/home.html")
     assert handler.translate_path("/index.html").endswith("site/index.html")
+    assert handler.translate_path("/gate/main.html").endswith("gate/main.html")
     assert (demo_server.SITE_DIR / "index.html").is_file()
     assert (demo_server.OLD_DIR / "home.html").is_file()
 

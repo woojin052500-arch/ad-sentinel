@@ -99,3 +99,19 @@ def test_own_site_checkbox_asks_once(app, monkeypatch):
     app._on_own_site()
     assert len(asked) == 1 and "권한" in asked[0][1]
     assert app.own_site.get() is False
+
+
+def test_gate_option_and_notices(app):
+    app.start_url.set("https://www.example.go.kr/")
+    assert app._make_config().enter_gate is True
+    app.enter_gate.set(False)
+    assert app._make_config().enter_gate is False
+
+    app._handle_event(("notice", "입장 버튼('입장하기') 클릭 후 점검 계속 (링크 0개 → 3개)"))
+    assert "입장 버튼('입장하기') 클릭 후 점검 계속" in app.log.get("1.0", "end")
+
+    crawl = _crawl()
+    report = detect(crawl)
+    report["meta"]["notes"] = ["발견한 링크가 적어 2페이지만 점검했습니다. 입장 버튼이 있는 사이트라면 입장 후 주소를 시작 주소로 넣어보세요."]
+    app._show_report(crawl, report)
+    assert "발견한 링크가 적어 2페이지만" in app.detail.get("1.0", "end")

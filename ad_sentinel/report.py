@@ -56,6 +56,11 @@ def stats_lines(report: dict) -> list[str]:
         lines.append(f"소요 시간: {minutes}분 {seconds}초" if minutes else f"소요 시간: {seconds}초")
     if st.get("stopped_by_user"):
         lines.append("사용자가 중간에 중지함")
+    meta = report.get("meta", {})
+    if meta.get("gate"):
+        lines.append(f"입장 버튼 클릭: '{meta['gate']['text']}'")
+    if (meta.get("sitemap") or {}).get("urls"):
+        lines.append(f"sitemap.xml에서 찾은 주소: {meta['sitemap']['urls']}개")
     return lines
 
 
@@ -130,6 +135,7 @@ def export_html(report: dict, path: str | Path) -> Path:
 <h1>공공 웹사이트 불법광고 점검 보고서</h1>
 <div class="meta">점검 방식: {mode} · 대상: {e(target)} · 점검 페이지 {meta.get('page_count', 0)}개 ·
 점검 일시: {e(str(meta.get('detected_at', '')))} · AD Sentinel {e(str(meta.get('version', '')))}</div>
+{''.join(f'<p style="background:#fff4e5;padding:8px 12px;border-radius:6px">{e(n)}</p>' for n in meta.get('notes') or [])}
 <div class="summary">
   <div>전체 발견<b>{summary['findings']}건</b></div>
   <div>불법광고 의심<b>{summary['high']}건</b></div>

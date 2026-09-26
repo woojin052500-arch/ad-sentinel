@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="utf-8"><title>사이트맵 기관</title></head>
+<body>
+  <h1>사이트맵 기관</h1>
+  <div id="menu"><div class="item">소개</div><div class="item">소식</div><div class="item">자료</div></div>
+  <script>
+    var paths = ['/page1.html', '/page2.html', '/page3.html'];
+    document.querySelectorAll('.item').forEach(function (el, i) {
+      el.addEventListener('click', function () { location.href = paths[i]; });
+    });
+  </script>
+</body>
+</html>

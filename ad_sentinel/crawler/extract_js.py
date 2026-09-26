@@ -207,6 +207,40 @@ EXTRACT_JS = r"""
         return h;
     }
 
+    const NAV_ATTRS = ['data-href', 'data-url', 'data-link', 'data-route', 'data-path', 'routerlink',
+                       'ng-reflect-router-link'];
+    const NAV_CALL = /(?:location(?:\.href)?\s*=\s*|location\.(?:assign|replace)\(\s*|window\.open\(\s*|\b(?:navigate|push|goto|go[A-Z_]\w*|go|move\w*|fn\w*|link\w*)\(\s*|path\s*:\s*)['"`]([^'"`\s]+)['"`]/g;
+
+    function looksLikeUrl(t) {
+        return /^(https?:\/\/|\/|\.\.?\/)/i.test(t) || /\.(html?|do|jsp|php|aspx?)(\?|#|$)/i.test(t) || /^[\w-]+\?[\w-]+=/.test(t);
+    }
+
+    function navTarget(el, tag) {
+        for (const name of NAV_ATTRS) {
+            const v = el.getAttribute(name);
+            if (v && looksLikeUrl(v.trim())) return { url: v.trim(), source: name };
+        }
+        const code = el.getAttribute('onclick');
+        if (code) {
+            NAV_CALL.lastIndex = 0;
+            let m;
+            while ((m = NAV_CALL.exec(code)) !== null) {
+                if (looksLikeUrl(m[1])) return { url: m[1], source: 'onclick' };
+            }
+        }
+        return null;
+    }
+
+    function resolveUrl(u) {
+        try { return new URL(u, document.baseURI).href; } catch (e) { return ''; }
+    }
+
+    function navRecord(el, nav, hidden, r) {
+        return { type: 'link', source: nav.source, selector: cssSelector(el), href: resolveUrl(nav.url),
+                 raw_href: nav.url, content: clip(el.textContent || el.getAttribute('aria-label') || el.title || ''),
+                 target: '', hidden, rect: r ? rectOf(r) : null };
+    }
+
     const all = body.getElementsByTagName('*');
     const total = all.length;
 
@@ -224,9 +258,13 @@ EXTRACT_JS = r"""
         const text = parentHidden ? '' : ownText(el);
         const isLink = tag === 'A' || tag === 'AREA' ? el.hasAttribute('href') : false;
         const isFrame = tag === 'IFRAME' || tag === 'FRAME';
+        const href = isLink ? (el.getAttribute('href') || '').trim() : '';
+        const nav = (!isLink || href === '' || href.startsWith('#') || /^javascript:/i.test(href))
+            ? navTarget(el, tag) : null;
 
         if (parentHidden) {
             hiddenOf.set(el, true);
+            if (nav) push(navRecord(el, nav, true, null));
             if (isLink) {
                 push({ type: 'link', selector: cssSelector(el), href: el.href,
                        raw_href: el.getAttribute('href'), content: clip(el.textContent || el.title || ''),
@@ -240,7 +278,7 @@ EXTRACT_JS = r"""
             continue;
         }
 
-        const needsStyle = text.length > 0 || el.firstElementChild || isLink || isFrame || tag === 'IMG';
+        const needsStyle = text.length > 0 || el.firstElementChild || isLink || isFrame || nav || tag === 'IMG';
         if (!needsStyle) { hiddenOf.set(el, false); continue; }
 
         const st = styleOf(el);
@@ -269,6 +307,8 @@ EXTRACT_JS = r"""
                    raw_href: el.getAttribute('href'), content: clip(label),
                    target: el.getAttribute('target') || '', hidden: selfHidden, rect: rectOf(r) });
         }
+
+        if (nav) push(navRecord(el, nav, selfHidden, r));
 
         if (isFrame) {
             const fr = selfHidden ? reasons.slice() : [];

@@ -98,6 +98,9 @@ class Detector:
                 "page_count": len(self.crawl.get("pages", [])),
                 "mode": self.crawl.get("meta", {}).get("mode", "site"),
                 "seed_count": self.seed_count,
+                "notes": self.crawl.get("meta", {}).get("notes", []),
+                "gate": self.crawl.get("meta", {}).get("gate"),
+                "sitemap": self.crawl.get("meta", {}).get("sitemap"),
                 "config": vars(self.config).copy(),
             },
             "summary": {

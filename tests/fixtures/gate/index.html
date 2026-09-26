@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="utf-8"><title>동호회 누리집</title><script src="common.js"></script>
+<style>.intro { text-align: center; padding: 40px; } button, .btn { margin: 6px; padding: 8px 16px; }</style>
+</head>
+<body>
+  <div class="intro">
+    <h1>OO 동호회 누리집</h1>
+    <p>방문을 환영합니다.</p>
+    <button onclick="clickLog('login')">로그인 후 입장</button>
+    <button onclick="clickLog('join')">회원가입하고 시작하기</button>
+    <button onclick="clickLog('delete')">전체 삭제</button>
+    <span class="btn" role="button" onclick="clickLog('report')">신고하기</span>
+    <form method="post" action="/clicked/form-post">
+      <input type="password" name="pw"> <button type="submit">확인</button>
+    </form>
+    <button class="btn-border enter" onclick="enter()">입장하기 ▶</button>
+  </div>
+  <script>
+    function enter() {
+      clickLog('enter');
+      document.cookie = 'entered=1; path=/';
+      location.href = 'main.html';
+    }
+  </script>
+</body>
+</html>

@@ -34,7 +34,10 @@ class QueueLogHandler(logging.Handler):
         self.setFormatter(logging.Formatter("%(asctime)s %(message)s", "%H:%M:%S"))
 
     def emit(self, record):
-        self.events.put(("log", self.format(record)))
+        if record.name.startswith("ad_sentinel.notice"):
+            self.events.put(("notice", record.getMessage()))
+        else:
+            self.events.put(("log", self.format(record)))
 
 
 class App(tk.Tk):
@@ -62,6 +65,7 @@ class App(tk.Tk):
         self.max_pages = tk.IntVar(value=30)
         self.max_depth = tk.IntVar(value=3)
         self.own_site = tk.BooleanVar(value=False)
+        self.enter_gate = tk.BooleanVar(value=True)
         self.show_detail_log = tk.BooleanVar(value=False)
         self.list_info = tk.StringVar(value="불러온 목록 없음")
         self.status = tk.StringVar(value="점검할 사이트 주소를 입력하고 [점검 시작]을 누르세요.")
@@ -118,6 +122,10 @@ class App(tk.Tk):
         ttk.Label(options, text="링크 깊이").pack(side="left", padx=(pad * 2, 0))
         ttk.Spinbox(options, from_=0, to=10, textvariable=self.max_depth, width=4).pack(side="left", padx=pad)
         ttk.Label(options, text="(시작 주소에서 링크를 몇 번까지 따라갈지)", foreground=HINT_COLOR).pack(side="left")
+        ttk.Checkbutton(self.site_frame, variable=self.enter_gate,
+                        text="첫 화면의 '입장' 버튼 자동 클릭 (입장해야 본 화면이 나오는 사이트용, "
+                             "로그인·가입·결제·삭제·신고 버튼은 누르지 않음)").grid(
+            row=3, column=0, columnspan=2, sticky="w", pady=(pad, 0))
         self.site_frame.columnconfigure(1, weight=1)
 
         self.list_frame = ttk.Frame(target)
@@ -271,7 +279,8 @@ class App(tk.Tk):
         except (tk.TclError, ValueError):
             messagebox.showwarning("입력 오류", "최대 페이지 수와 링크 깊이는 숫자로 입력하세요.")
             return None
-        return CrawlConfig(start_url=url, max_pages=max(1, max_pages), max_depth=max(0, max_depth), **common)
+        return CrawlConfig(start_url=url, max_pages=max(1, max_pages), max_depth=max(0, max_depth),
+                           enter_gate=self.enter_gate.get(), **common)
 
     def _start(self):
         if self.worker and self.worker.is_alive():
@@ -339,6 +348,8 @@ class App(tk.Tk):
         kind = event[0]
         if kind == "log":
             self._add_log(event[1], simple=False)
+        elif kind == "notice":
+            self._say(event[1])
         elif kind == "progress":
             _, done, total, url = event
             self.progress.configure(maximum=max(total, 1), value=done)
@@ -431,6 +442,8 @@ class App(tk.Tk):
                       ("hint", "두 번 클릭하면 해당 페이지를 브라우저로 엽니다.\n")]
         else:
             parts += [("title", "발견된 불법광고가 없습니다.\n")]
+        for note in report["meta"].get("notes") or []:
+            parts += [("label", "\n"), ("warn", note + "\n")]
         parts += [("label", "점검 요약\n"), ("", "\n".join(f"· {line}" for line in stats_lines(report)) + "\n")]
         if report.get("unchecked"):
             parts += [("label", "\n"), ("warn", f"점검하지 못한 영역이 {len(report['unchecked'])}곳 있습니다. "

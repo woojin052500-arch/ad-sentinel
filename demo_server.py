@@ -10,12 +10,14 @@ FIXTURES = Path(__file__).resolve().parent / "tests" / "fixtures"
 SITE_DIR = FIXTURES / "site"
 OLD_DIR = FIXTURES / "reflect"
 OLD_PREFIX = "/old/"
+MOUNTS = {OLD_PREFIX: OLD_DIR, "/gate/": FIXTURES / "gate"}
 
 
 class DemoHandler(http.server.SimpleHTTPRequestHandler):
     def translate_path(self, path):
-        if path.startswith(OLD_PREFIX):
-            return str(OLD_DIR / path[len(OLD_PREFIX):].split("?")[0].split("#")[0])
+        for prefix, directory in MOUNTS.items():
+            if path.startswith(prefix):
+                return str(directory / path[len(prefix):].split("?")[0].split("#")[0])
         return super().translate_path(path)
 
     def log_message(self, fmt, *args):
@@ -60,7 +62,9 @@ def main():
     print(" ② URL 목록 점검 시연: '목록 파일 불러오기'에서 아래 파일 선택 → 점검 시작")
     print(f"    {url_list}")
     print("    - URL 파라미터 반사 2건·노출 광고 1건(불법광고 의심), 악용 가능 지점 1건(검토 필요)이 발견됩니다.")
-    print(f" ③ 브라우저로 직접 보기: {base}index.html , {base}old/home.html?play=바카라분석")
+    print(f" ③ 입장 버튼 사이트 시연: 시작 주소에 {base}gate/index.html 입력 → 점검 시작")
+    print("    - '입장하기' 버튼만 누르고 로그인·가입·삭제·신고 버튼은 누르지 않습니다. 게시판의 숨김 광고 1건이 발견됩니다.")
+    print(f" ④ 브라우저로 직접 보기: {base}index.html , {base}old/home.html?play=바카라분석")
     print("-" * 70)
     print(" 종료하려면 이 창에서 Ctrl+C 를 누르세요.")
     try:

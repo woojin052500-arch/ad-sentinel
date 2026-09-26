@@ -1,0 +1,145 @@
+import functools
+import http.server
+import os
+import threading
+from pathlib import Path
+
+import pytest
+
+from ad_sentinel.config import CrawlConfig
+from ad_sentinel.crawler import Crawler
+from ad_sentinel.crawler.sitemap import parse_sitemap, sitemap_locations
+from ad_sentinel.crawler.url_utils import is_safe_to_visit
+from ad_sentinel.detector import detect
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+class Server:
+    def __init__(self, name: str, spa: bool = False):
+        root = FIXTURES / name
+        self.requests: list[str] = []
+        requests = self.requests
+
+        class Handler(http.server.SimpleHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                requests.append(self.path)
+                if self.path.startswith("/clicked/"):
+                    self.send_response(204)
+                    self.end_headers()
+                    return
+                if spa and "." not in self.path.split("?")[0].rsplit("/", 1)[-1]:
+                    self.path = "/index.html"
+                super().do_GET()
+
+            def do_POST(self):
+                requests.append("POST " + self.path)
+                self.send_response(204)
+                self.end_headers()
+
+        os.environ["NO_PROXY"] = "127.0.0.1,localhost"
+        os.environ["no_proxy"] = "127.0.0.1,localhost"
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(Handler, directory=str(root)))
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.base = f"http://127.0.0.1:{self.server.server_port}/"
+
+    def crawl(self, path="", **options):
+        values = dict(start_url=self.base + path, max_pages=50, delay_sec=0, render_wait_ms=300,
+                      networkidle_timeout_ms=1500)
+        values.update(options)
+        try:
+            return Crawler(CrawlConfig(**values)).run()
+        finally:
+            self.server.shutdown()
+
+
+def _paths(crawl):
+    return sorted(p["url"].split("/", 3)[3] for p in crawl["pages"])
+
+
+@pytest.fixture(scope="module")
+def gate_run():
+    server = Server("gate")
+    crawl = server.crawl("index.html")
+    return crawl, server.requests
+
+
+def test_gate_button_is_clicked_and_site_is_crawled(gate_run):
+    crawl, requests = gate_run
+    assert _paths(crawl) == ["board.html", "gallery.html", "index.html", "notice.html"]
+    first = crawl["pages"][0]
+    assert first["gate"]["text"].startswith("입장하기")
+    assert first["gate"]["url_changed"] is True and first["final_url"].endswith("main.html")
+    assert first["gate"]["links_before"] == 0 and first["gate"]["links_after"] == 3
+    assert crawl["meta"]["gate"]["text"].startswith("입장하기")
+    assert crawl["meta"]["notes"] == []
+    report = detect(crawl)
+    assert any(f["content"] == "온라인 카지노 바로가기" for f in report["findings"])
+
+
+def test_dangerous_buttons_and_links_are_never_used(gate_run):
+    _, requests = gate_run
+    assert "/clicked/enter" in requests
+    for danger in ["/clicked/login", "/clicked/join", "/clicked/delete", "/clicked/report", "POST /clicked/form-post"]:
+        assert danger not in requests
+    assert not any("logout" in r or "delete.do" in r for r in requests)
+
+
+def test_gate_disabled_shows_hint():
+    crawl = Server("gate").crawl("index.html", enter_gate=False)
+    assert len(crawl["pages"]) == 1
+    assert crawl["pages"][0]["gate"] is None
+    assert crawl["meta"]["notes"] == [
+        "발견한 링크가 적어 1페이지만 점검했습니다. 입장 버튼이 있는 사이트라면 입장 후 주소를 시작 주소로 넣어보세요."]
+
+
+def test_spa_without_url_change_is_crawled():
+    crawl = Server("spa", spa=True).crawl("")
+    assert _paths(crawl) == ["", "board", "gallery", "notice"]
+    first = crawl["pages"][0]
+    assert first["gate"]["text"] == "Enter" and first["gate"]["url_changed"] is False
+    sources = {e.get("source") for e in first["elements"] if e["type"] == "link"}
+    assert {"onclick", "data-href"} <= sources
+    board = next(p for p in crawl["pages"] if p["url"].endswith("/board"))
+    assert board["gate"] is not None
+    report = detect(crawl)
+    assert any("토토사이트" in f["content"] for f in report["findings"])
+
+
+def test_sitemap_pages_are_added():
+    server = Server("sitemap")
+    crawl = server.crawl("index.html")
+    assert _paths(crawl) == ["index.html", "page1.html", "page2.html", "page3.html"]
+    assert crawl["meta"]["sitemap"]["urls"] == 4
+    assert [f.rsplit("/", 1)[1] for f in crawl["meta"]["sitemap"]["files"]] == ["sitemap_index.xml",
+                                                                                 "sitemap-pages.xml"]
+    assert any("private/secret.html" in s["url"] for s in crawl["skipped"])
+    assert not any("logout" in r for r in server.requests)
+    assert crawl["meta"]["notes"] == []
+    assert any(p["found_on"] == "sitemap.xml" for p in crawl["pages"])
+    report = detect(crawl)
+    assert any("바카라" in f["content"] for f in report["findings"])
+
+
+def test_sitemap_parsing():
+    robots = "User-agent: *\nSitemap: https://x.go.kr/a.xml\nsitemap: /b.xml\n"
+    assert sitemap_locations(robots, "https://x.go.kr/") == ["https://x.go.kr/a.xml", "https://x.go.kr/b.xml"]
+    urlset = b'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>/p.html</loc></url></urlset>'
+    assert parse_sitemap(urlset, "https://x.go.kr/s.xml") == (["https://x.go.kr/p.html"], [])
+    index = b'<sitemapindex><sitemap><loc>https://x.go.kr/s2.xml</loc></sitemap></sitemapindex>'
+    assert parse_sitemap(index, "https://x.go.kr/") == ([], ["https://x.go.kr/s2.xml"])
+    assert parse_sitemap(b"<html>not xml", "https://x.go.kr/") == ([], [])
+
+
+@pytest.mark.parametrize("url,safe", [
+    ("http://x.go.kr/board/delete.do?id=3", False),
+    ("http://x.go.kr/member/logout.do", False),
+    ("http://x.go.kr/bbs?act=del&id=1", False),
+    ("http://x.go.kr/board/view.do?id=3", True),
+    ("http://x.go.kr/deliver/info.do", True),
+])
+def test_unsafe_urls_are_not_visited(url, safe):
+    assert is_safe_to_visit(url) is safe

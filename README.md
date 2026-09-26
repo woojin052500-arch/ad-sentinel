@@ -32,6 +32,8 @@ ad-sentinel/
 │   │   ├── extract_js.py      #   브라우저 안에서 실행되는 추출 스크립트 (숨김 판정 포함)
 │   │   ├── browser.py         #   브라우저 자동 탐색 (Chromium → Edge → Chrome)
 │   │   ├── robots.py          #   robots.txt 준수
+│   │   ├── gate.py            #   관문(입장 버튼) 찾기, 위험 버튼 제외 목록
+│   │   ├── sitemap.py         #   robots.txt Sitemap 항목·sitemap.xml 읽기
 │   │   └── url_utils.py       #   URL 정규화, 같은 사이트 판정
 │   ├── detector/              # [2단계] 탐지·분류
 │   │   ├── detector.py        #   근거별 점수 합산, 판정, 페이지 간 묶기
@@ -62,6 +64,7 @@ ad-sentinel/
 
 1. **점검 방식** 선택
    - **사이트 점검**: 시작 주소를 넣으면 같은 사이트 안의 링크를 따라가며 하위 페이지를 점검합니다. 최대 페이지 수와 링크 깊이를 정할 수 있습니다.
+     sitemap.xml이 있으면 먼저 읽어 점검 목록에 넣고, **첫 화면의 '입장' 버튼 자동 클릭**(기본 켜짐)으로 관문 페이지를 통과합니다.
    - **URL 목록 점검**: 주소 목록 파일에 있는 주소만 점검합니다. 링크는 따라가지 않습니다.
      txt(한 줄에 주소 하나), CSV(첫 번째 열), 구글 서치 콘솔에서 내보낸 파일(csv 또는 zip)을 그대로 읽습니다.
 2. 필요하면 **내가 관리하는 사이트 점검 (robots.txt 무시)** 체크 → 확인 창에서 한 번 더 확인
@@ -98,6 +101,7 @@ python demo_server.py            # 기본 포트 8000, --port 로 변경
 |---|---|---|
 | 사이트 점검 | `http://127.0.0.1:8000/index.html` | 숨김 광고 6건, 노출 광고 2건, 점검하지 못한 영역 1곳(robots.txt) |
 | URL 목록 점검 | `output/demo_urls.csv` | URL 파라미터 반사 2건, 노출 광고 1건, 악용 가능 지점 1건 |
+| 입장 버튼 사이트 | `http://127.0.0.1:8000/gate/index.html` | '입장하기'만 클릭(로그인·가입·삭제·신고 버튼 제외), 숨김 광고 1건 |
 
 ### GUI 라이브러리: Tkinter를 쓴 이유
 
@@ -125,6 +129,35 @@ python main.py --from-json output/crawl_20260926_185056.json   # 기존 크롤�
 
 주요 옵션: `--max-pages`, `--depth`, `--delay`, `--page-timeout`, `--out`, `--report`, `--whitelist <도메인...>`, `--same-host-only`,
 `--ignore-robots`, `--show-browser`, `--browser <브라우저 경로>`
+
+### 관문 페이지·SPA·sitemap.xml 처리
+
+**관문(입장 버튼) 페이지** - `--no-gate`로 끌 수 있음, GUI: "첫 화면의 '입장' 버튼 자동 클릭"
+- 첫 페이지에서 같은 사이트 링크가 3개 미만이면 "입장, 입장하기, 들어가기, 시작, 확인, 계속, Enter, Continue" 등의
+  문구를 가진 보이는 버튼·링크를 찾아 **한 번** 클릭하고, 클릭 전후 내용을 합쳐 다시 링크를 수집합니다.
+- 입장 버튼을 누르면 로그에 `입장 버튼('입장하기') 클릭 후 점검 계속 (링크 0개 → 3개)`가 표시됩니다.
+- 입장 상태가 쿠키가 아니라 화면 상태로만 유지되는 사이트(SPA)는 다른 페이지를 열 때도 관문이 다시 나오므로,
+  처음 누른 것과 **같은 문구의 버튼만** 다시 누릅니다.
+- **절대 누르지 않는 버튼**: 문구·주소·onclick·id·class에 로그인, 회원가입·가입, 결제·구매·주문, 삭제, 신고, 탈퇴, 로그아웃,
+  비밀번호, 다운로드·설치, 구독·후원, 전송 등이 들어간 버튼, 비밀번호 입력칸이 있거나 POST로 전송하는 폼 안의 버튼,
+  외부 사이트·메일·전화 링크 (`ad_sentinel/crawler/gate.py`의 `DANGER_WORDS`)
+- **방문하지 않는 주소**: 버튼과 별개로, 주소에 delete·remove·logout·withdraw·`act=del`·삭제·탈퇴 등이 들어간 링크는
+  GET으로도 방문하지 않습니다. (`url_utils.is_safe_to_visit`)
+
+**SPA(React·Vue·Next.js 등)** - `<a href>` 없이 이동하는 요소의 주소도 링크로 수집합니다. (`source` 필드로 구분)
+- `onclick`의 `location.href='...'`, `navigate('/x')`, `router.push({path: '/x'})`, `window.open('...')`, `goPage('...')` 등
+- `data-href`, `data-url`, `data-link`, `data-route`, `data-path`, `routerlink` 속성
+- 주소가 `#/경로` 형태(해시 라우팅)인 SPA는 주소로 페이지를 구분할 수 없어 개별 페이지로 점검하지 못합니다.
+
+**sitemap.xml** - `--no-sitemap`으로 끌 수 있음
+- 사이트 점검을 시작할 때 robots.txt의 `Sitemap:` 항목을 읽고, 없으면 `/sitemap.xml`, `/sitemap_index.xml`을 확인합니다.
+- sitemap 색인(sitemapindex)과 gzip 압축 sitemap을 지원하며, 같은 사이트 주소만 최대 2,000개까지 점검 목록에 넣습니다.
+  (최대 페이지 수 설정은 그대로 적용됩니다)
+
+**적게 끝났을 때 안내** - 최대 페이지 수의 20% 이하로 끝나면(5페이지 이상 차이):
+`발견한 링크가 적어 N페이지만 점검했습니다. 입장 버튼이 있는 사이트라면 입장 후 주소를 시작 주소로 넣어보세요.`
+를 로그·결과 요약·HTML 보고서에 표시합니다. 입장 버튼을 누른 뒤 링크를 충분히 찾았거나 sitemap으로 주소를 받은 경우는
+사이트가 원래 작은 것이므로 표시하지 않습니다.
 
 ### robots.txt 무시 (`--ignore-robots`, GUI: "내가 관리하는 사이트 점검")
 
@@ -249,6 +282,7 @@ python -m pytest
 `test_report.py`는 CSV(엑셀용 BOM)·HTML(특수문자 이스케이프)·JSON 내보내기를 검증합니다.
 `test_gui.py`는 화면이 있는 환경에서 결과 표·상세 화면·점검 요약·점검하지 못한 영역·로그 전환·입력 검증·robots 확인 창을 검증합니다. (화면이 없으면 건너뜀)
 `test_demo_server.py`는 시연 서버의 경로 연결과 목록 파일을 검증합니다.
+`test_gate.py`는 입장 버튼 사이트(위험 버튼이 눌리지 않았는지 서버 요청 기록으로 확인), 주소가 바뀌지 않는 SPA, sitemap 사이트, 적게 끝났을 때 안내, 방문 금지 주소를 검증합니다.
 
 ## 크롤링 결과 JSON 형식
 

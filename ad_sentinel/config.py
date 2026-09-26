@@ -24,6 +24,10 @@ class CrawlConfig:
     max_frames_per_page: int = 20
     max_scan_elements: int = 20000
     delay_sec: float = 0.5
+    enter_gate: bool = True
+    gate_link_threshold: int = 3
+    use_sitemap: bool = True
+    max_sitemap_urls: int = 2000
     respect_robots: bool = True
     max_elements_per_frame: int = 3000
     max_text_len: int = 500

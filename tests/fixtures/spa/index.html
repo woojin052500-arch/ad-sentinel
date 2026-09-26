@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="utf-8"><title>SPA 동호회</title></head>
+<body>
+  <div id="app"></div>
+  <script>
+    var entered = false;
+    var pages = {
+      '/': '<p>SPA 동호회 첫 화면입니다.</p>',
+      '/notice': '<h2>공지</h2><p>이번 주 모임 안내</p>',
+      '/board': '<h2>게시판</h2><p>자유롭게 글을 남겨 주세요</p>' +
+                '<p style="position:absolute;left:-9999px">토토사이트 추천 가입코드 777</p>',
+      '/gallery': '<h2>갤러리</h2><p>사진 모음</p>'
+    };
+    var nav = '<nav>' +
+      '<span class="menu" onclick="navigate(\'/notice\')">공지</span> ' +
+      '<span class="menu" data-href="/board">게시판</span> ' +
+      '<li class="menu" onclick="router.push({path: \'/gallery\'})">갤러리</li>' +
+      '</nav>';
+    var router = { push: function (o) { navigate(o.path); } };
+    function navigate(path) { history.pushState({}, '', path); render(); }
+    function enterSite() { entered = true; render(); }
+    function render() {
+      var app = document.getElementById('app');
+      if (!entered) {
+        app.innerHTML = '<h1>SPA 동호회</h1><div class="enter" role="button" onclick="enterSite()" ' +
+                        'style="display:inline-block;padding:10px 20px;border:1px solid #333">Enter</div>';
+        return;
+      }
+      app.innerHTML = nav + (pages[location.pathname] || pages['/']);
+    }
+    document.addEventListener('click', function (e) {
+      var target = e.target.closest('[data-href]');
+      if (target) navigate(target.getAttribute('data-href'));
+    });
+    render();
+  </script>
+</body>
+</html>

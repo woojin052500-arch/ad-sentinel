@@ -22,6 +22,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--report", default=None, help="탐지 결과 JSON 경로 (기본: output/detect_날짜_시간.json)")
     p.add_argument("--whitelist", nargs="*", default=[], help="추가로 신뢰할 도메인 (예: example.com)")
     p.add_argument("--same-host-only", action="store_true", help="하위 도메인은 탐색하지 않음")
+    p.add_argument("--no-gate", action="store_true", help="첫 화면의 '입장' 버튼을 자동으로 누르지 않음")
+    p.add_argument("--no-sitemap", action="store_true", help="sitemap.xml을 읽지 않음")
     p.add_argument("--ignore-robots", action="store_true",
                    help="내가 관리하는 사이트 점검: robots.txt 제한을 무시 (권한 있는 사이트에만 사용)")
     p.add_argument("--show-browser", action="store_true", help="브라우저 창을 띄워서 실행")
@@ -44,6 +46,8 @@ def crawl(args) -> dict | None:
         delay_sec=args.delay,
         page_total_timeout_sec=args.page_timeout,
         include_subdomains=not args.same_host_only,
+        enter_gate=not args.no_gate,
+        use_sitemap=not args.no_sitemap,
         respect_robots=not args.ignore_robots,
         headless=not args.show_browser,
         browser_executable=args.browser,
@@ -65,6 +69,8 @@ def crawl(args) -> dict | None:
 
 def print_report(report: dict) -> None:
     s = report["summary"]
+    for note in report["meta"].get("notes") or []:
+        print(f"\n[안내] {note}")
     print(f"\n탐지 결과: {s['findings']}건 (불법광고 의심 {s['high']}건, 검토 필요 {s['suspect']}건)")
     for f in report["findings"][:30]:
         print(f"  [{f['level_label']}] {f['pattern_label']} · {f['category']} {f['score']}점 | {f['content'][:60]}")

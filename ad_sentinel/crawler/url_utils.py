@@ -1,4 +1,5 @@
-from urllib.parse import urljoin, urlsplit, urlunsplit
+import re
+from urllib.parse import unquote, urljoin, urlsplit, urlunsplit
 
 SKIP_EXTENSIONS = {
     ".pdf", ".hwp", ".hwpx", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
@@ -59,3 +60,15 @@ def is_crawlable(url: str) -> bool:
     if dot == -1 or "/" in path[dot:]:
         return True
     return path[dot:] not in SKIP_EXTENSIONS
+
+
+UNSAFE_URL = re.compile(
+    r"log_?out|sign_?out|delete|remove|destroy|withdraw|unsubscribe|unregister|"
+    r"[/_.?&=-]del[/_.?&=-]|[?&](act|mode|cmd|action|proc)=(del|delete|remove|drop|out)\b|"
+    r"삭제|탈퇴|로그아웃",
+    re.IGNORECASE,
+)
+
+
+def is_safe_to_visit(url: str) -> bool:
+    return not UNSAFE_URL.search(unquote(url))
