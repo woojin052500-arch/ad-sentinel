@@ -84,6 +84,10 @@ def test_unresponsive_iframe_is_skipped(heavy_run):
     assert "본문 내용" in main["text"]
     stuck = [f for f in page["frames"] if not f["is_main"]]
     assert stuck and stuck[0]["timed_out"] is True
+    assert stuck[0]["src"].endswith("/never-responds")
+    assert stuck[0]["frame_url"].endswith("/never-responds")
+    assert stuck[0]["loaded"] is False
+    assert stuck[0]["frame_path"] == ["html > body > iframe"]
     assert any(e["type"] == "iframe" and e["raw_src"] == "/never-responds" for e in page["elements"])
 
 

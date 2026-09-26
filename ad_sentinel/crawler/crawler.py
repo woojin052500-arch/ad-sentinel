@@ -11,7 +11,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from ad_sentinel import __version__
 from ad_sentinel.config import CrawlConfig
 from ad_sentinel.crawler.browser import launch_browser
-from ad_sentinel.crawler.extract_js import EXTRACT_JS, SELECTOR_JS
+from ad_sentinel.crawler.extract_js import EXTRACT_JS, FRAME_ELEMENT_JS
 from ad_sentinel.crawler.robots import RobotsChecker
 from ad_sentinel.crawler.url_utils import is_crawlable, is_same_site, normalize_url
 from ad_sentinel.paths import setup_bundled_browser
@@ -233,9 +233,13 @@ class Crawler:
         budget_ms = max(300, min(cfg.extract_time_budget_ms, int(timeout_ms * 0.7)))
         started = time.monotonic()
 
-        frame_path = self._frame_path(frame, timeout_ms)
+        frame_path, src = self._frame_path(frame, timeout_ms)
+        loaded_url = "" if frame.url in ("", "about:blank") and src else frame.url
+        frame_url = loaded_url or src
         frame_info = {
-            "frame_url": frame.url,
+            "frame_url": frame_url,
+            "src": src,
+            "loaded": bool(loaded_url),
             "frame_path": frame_path,
             "is_main": frame.parent_frame is None,
             "title": "",
@@ -268,7 +272,7 @@ class Crawler:
             else:
                 frame_info["error"] = str(e).strip().splitlines()[0]
             page_result["frames"].append(frame_info)
-            log.warning("  프레임 %d/%d %s %s → 건너뜀: %s", index, count, label, frame.url[:80], frame_info["error"])
+            log.warning("  프레임 %d/%d %s %s → 건너뜀: %s", index, count, label, frame_url[:80], frame_info["error"])
             return
 
         frame_info["title"] = data["title"]
@@ -281,7 +285,7 @@ class Crawler:
         page_result["frames"].append(frame_info)
 
         for rec in data["records"]:
-            rec["frame_url"] = frame.url
+            rec["frame_url"] = frame_url
             rec["frame_path"] = frame_path
             page_result["elements"].append(rec)
 
@@ -293,22 +297,26 @@ class Crawler:
         log.info("  프레임 %d/%d %s %.2fs (스크립트 %.2fs) 요소 %d개 중 %d개 검사, 레코드 %d개%s %s",
                  index, count, label, frame_info["elapsed_ms"] / 1000, data["elapsed_ms"] / 1000,
                  data["total_elements"], data["scanned"], len(data["records"]),
-                 " [" + ", ".join(notes) + "]" if notes else "", "" if frame_info["is_main"] else frame.url[:80])
+                 " [" + ", ".join(notes) + "]" if notes else "", "" if frame_info["is_main"] else frame_url[:80])
 
-    def _frame_path(self, frame: Frame, timeout_ms: int) -> list[str]:
+    def _frame_path(self, frame: Frame, timeout_ms: int) -> tuple[list[str], str]:
         path = []
+        src = ""
         cur = frame
         while cur.parent_frame is not None:
             try:
                 handle = cur.frame_element()
                 try:
-                    path.insert(0, self._evaluate(cur.parent_frame, SELECTOR_JS, handle, min(3000, timeout_ms)))
+                    info = self._evaluate(cur.parent_frame, FRAME_ELEMENT_JS, handle, min(3000, timeout_ms))
                 finally:
                     handle.dispose()
+                path.insert(0, info["selector"])
+                if cur is frame:
+                    src = info["src"]
             except PlaywrightError:
                 path.insert(0, "(알 수 없음)")
             cur = cur.parent_frame
-        return path
+        return path, src
 
     def _next_links(self, page_result: dict) -> list[str]:
         cfg = self.config

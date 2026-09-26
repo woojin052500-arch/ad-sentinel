@@ -1,4 +1,4 @@
-SELECTOR_JS = r"""
+FRAME_ELEMENT_JS = r"""
 (el) => {
     const parts = [];
     let cur = el;
@@ -21,7 +21,7 @@ SELECTOR_JS = r"""
         parts.unshift(part);
         cur = parent;
     }
-    return parts.join(' > ');
+    return { selector: parts.join(' > '), src: el.src || el.getAttribute('src') || '' };
 }
 """
 
