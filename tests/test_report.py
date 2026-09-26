@@ -24,7 +24,8 @@ REPORT = {
 def test_csv_opens_in_korean_excel(tmp_path):
     path = export_csv(REPORT, tmp_path / "r.csv")
     assert path.read_bytes().startswith(b"\xef\xbb\xbf")
-    rows = list(csv.reader(open(path, encoding="utf-8-sig")))
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.reader(f))
     assert rows[0][:4] == ["번호", "판정", "유형", "분류"]
     assert rows[1][1:4] == ["검토 필요", "악용 가능 지점", "도박"]
     assert "q=카지노 규제" in rows[1]

@@ -1,8 +1,10 @@
 import argparse
+import posixpath
 import functools
 import http.server
 import socket
 from pathlib import Path
+from urllib.parse import unquote
 
 from ad_sentinel.paths import output_dir
 
@@ -17,7 +19,9 @@ class DemoHandler(http.server.SimpleHTTPRequestHandler):
     def translate_path(self, path):
         for prefix, directory in MOUNTS.items():
             if path.startswith(prefix):
-                return str(directory / path[len(prefix):].split("?")[0].split("#")[0])
+                rest = unquote(path[len(prefix):].split("?")[0].split("#")[0])
+                parts = [p for p in posixpath.normpath("/" + rest).split("/") if p not in ("", ".", "..")]
+                return str(directory.joinpath(*parts))
         return super().translate_path(path)
 
     def log_message(self, fmt, *args):

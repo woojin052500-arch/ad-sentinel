@@ -1,12 +1,16 @@
+from pathlib import Path
+
 import demo_server
 
 
 def test_demo_paths_map_to_fixtures():
     handler = object.__new__(demo_server.DemoHandler)
     handler.directory = str(demo_server.SITE_DIR)
-    assert handler.translate_path("/old/home.html?play=x").endswith("reflect/home.html")
-    assert handler.translate_path("/index.html").endswith("site/index.html")
-    assert handler.translate_path("/gate/main.html").endswith("gate/main.html")
+    fixtures = Path(demo_server.__file__).resolve().parent / "tests" / "fixtures"
+    assert Path(handler.translate_path("/old/home.html?play=x")) == fixtures / "reflect" / "home.html"
+    assert Path(handler.translate_path("/index.html")) == fixtures / "site" / "index.html"
+    assert Path(handler.translate_path("/gate/main.html#top")) == fixtures / "gate" / "main.html"
+    assert Path(handler.translate_path("/gate/../../../secret.txt")) == fixtures / "gate" / "secret.txt"
     assert (demo_server.SITE_DIR / "index.html").is_file()
     assert (demo_server.OLD_DIR / "home.html").is_file()
 
