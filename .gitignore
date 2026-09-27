@@ -9,3 +9,4 @@ build/
 dist/
 
 output/
+ui_settings.json

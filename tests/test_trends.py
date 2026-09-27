@@ -72,6 +72,19 @@ def test_search_list_pollution(trends):
     assert not any("여권" in f["content"] or "주민등록" in f["content"] for f in report["findings"])
 
 
+def test_search_result_pages_are_quiet_duplicates(trends):
+    from ad_sentinel.report import stats_lines
+
+    crawl, report = trends
+    assert crawl["meta"]["repeated_screens"] == []
+    duplicates = crawl["meta"]["duplicate_screens"]
+    assert len(duplicates) == 1 and duplicates[0]["title"] == "통합검색 - 가상시청" and duplicates[0]["count"] == 7
+    assert not any("같은 화면" in n for n in crawl["meta"]["notes"])
+    assert not any("똑같은 화면" in u["reason"] for u in report["unchecked"])
+    assert report["stats"]["duplicate_pages"] == 6
+    assert "내용이 같은 페이지 6개(중복, 주소만 다르고 화면이 같음)" in stats_lines(report)
+
+
 def test_normal_pages_and_prevention_notice_have_no_findings(trends):
     _, report = trends
     assert _on(report, "index.html") == []
@@ -124,7 +137,14 @@ def test_cloaking_is_found_for_each_disguise(cloak_run):
     crawl, report, requests = cloak_run
     found = {f["cloaking"]["profile"]: f for f in report["findings"] if f["pattern"] == CLOAKING}
     assert set(found) == {"googlebot", "google_referer", "mobile"}
-    assert all(f["pattern_label"] == "클로킹 의심" and f["level"] == "high" for f in found.values())
+    assert {k: f["pattern_label"] for k, f in found.items()} == {
+        "googlebot": "클로킹 의심(구글봇)", "google_referer": "클로킹 의심(구글 검색 경유)", "mobile": "클로킹 의심(모바일)"}
+    assert all(f["level"] == "high" for f in found.values())
+    assert found["googlebot"]["content"] == "바카라 사이트 추천 - 온라인 카지노 가입코드"
+    assert found["mobile"]["content"] == "모바일 슬롯사이트 가입 시 꽁머니 3만원 지급"
+    assert found["google_referer"]["content"] == "다른 사이트로 이동: https://toto-win.invalid/?ref=gov"
+    assert not any("복지 서비스" in f["content"] for f in found.values())
+    assert crawl["meta"]["notes"] == []
     bot = found["googlebot"]
     assert bot["cloaking"]["only_in"] == "구글봇으로 볼 때만 나타남"
     assert "카지노" in bot["cloaking"]["new_keywords"] and "바카라" in bot["cloaking"]["new_keywords"]

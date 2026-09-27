@@ -1,3 +1,4 @@
+import json
 import logging
 import queue
 import threading
@@ -17,7 +18,7 @@ from ad_sentinel.gui import winicon
 from ad_sentinel.gui.tooltip import HelpIcon, Tooltip, help_content
 from ad_sentinel.help_texts import (COLUMNS, QUICK_START, QUICK_START_FOOTER, QUICK_START_TITLE, SETTINGS,
                                     UNCHECKED, estimate_text, quick_start_text)
-from ad_sentinel.paths import asset_path, output_dir
+from ad_sentinel.paths import app_dir, asset_path, output_dir
 from ad_sentinel.report import (display_url, export_csv, export_html, export_json, location_text,
                                 reflected_text, stats_lines)
 from ad_sentinel.storage import load_json, save_json
@@ -31,6 +32,8 @@ KOREAN_FONTS = ("Malgun Gothic", "맑은 고딕", "Noto Sans CJK KR", "Noto Sans
 MAX_LOG_LINES = 3000
 HINT_COLOR = "#6b7280"
 RESIZE_SETTLE_MS = 150
+POLL_MS = 200
+UI_SETTINGS_FILE = "ui_settings.json"
 ICON_PHOTO_SIZES = (256, 64, 48, 32, 24, 16)
 
 log = logging.getLogger(__name__)
@@ -54,10 +57,14 @@ class App(tk.Tk):
         super().__init__()
         self.title(f"{APP_TITLE} (v{__version__})")
         self.scale = max(1.0, self.winfo_fpixels("1i") / 96.0)
-        _apply_theme(self, self.scale)
-        self.configure(background=ttk.Style(self).lookup("TFrame", "background") or "#fafafa")
+        self.ui_settings = load_ui_settings()
+        self.light_ui = tk.BooleanVar(value=bool(self.ui_settings.get("light_ui", True)))
+        _apply_theme(self, self.scale, self.light_ui.get())
+        self.configure(background=_theme_background(self))
         self.icon_problems = _set_icon(self)
         ttk.Style(self).configure("TLabelframe.Label", font=_bold_font())
+        self.pending_log: list[str] = []
+        self.log_job: str | None = None
 
         self.events: queue.Queue = queue.Queue()
         self.stop_event = threading.Event()
@@ -251,7 +258,10 @@ class App(tk.Tk):
                                          values=list(CLOAKING_MODES.values()))
         self.cloaking_box.pack(side="left", padx=pad)
         ttk.Label(adv2, foreground=HINT_COLOR,
-                  text="(구글봇·구글 검색 경유·모바일로도 열어 비교, 켜면 검사한 페이지마다 몇 초 더 걸림)").pack(side="left")
+                  text="(구글봇·구글 검색 경유·모바일로도 열어 비교)").pack(side="left")
+        ttk.Checkbutton(adv2, text="가벼운 화면(Windows 기본 테마)", variable=self.light_ui,
+                        command=self._toggle_light_ui).pack(side="left", padx=(pad * 4, 0))
+        self._help(adv2, "light_ui").pack(side="left", padx=(pad // 2, 0))
 
         buttons = ttk.Frame(root)
         buttons.pack(fill="x", pady=pad)
@@ -323,7 +333,7 @@ class App(tk.Tk):
             self.table.heading(key, text=f"{title} ?")
             self.table.column(key, width=width, minwidth=width if key != "content" else self.px(120),
                               anchor="w" if key == "content" else "center", stretch=key == "content")
-        ttk.Style(self).configure("Treeview", rowheight=int(cell_font.metrics("linespace") * 1.5))
+        self._table_style()
         for level, color in LEVEL_COLORS.items():
             self.table.tag_configure(level, background=color)
         scroll = ttk.Scrollbar(frame, orient="vertical", command=self.table.yview)
@@ -334,6 +344,21 @@ class App(tk.Tk):
         self.table.bind("<Double-1>", lambda e: self._open_page())
         self.table_tooltip = Tooltip(self.table, self._heading_help, self.px(380))
         return frame
+
+    def _table_style(self):
+        cell_font = _font_of("Treeview") or font.nametofont("TkDefaultFont")
+        ttk.Style(self).configure("Treeview", rowheight=int(cell_font.metrics("linespace") * 1.5))
+
+    def _toggle_light_ui(self):
+        _apply_theme(self, self.scale, self.light_ui.get())
+        background = _theme_background(self)
+        self.configure(background=background)
+        ttk.Style(self).configure("TLabelframe.Label", font=_bold_font())
+        self._table_style()
+        for icon in self.help_icons.values():
+            icon.configure(background=background)
+        self.ui_settings["light_ui"] = self.light_ui.get()
+        save_ui_settings(self.ui_settings)
 
     def _heading_help(self, event) -> tuple[str, str] | None:
         if event is None or self.table.identify_region(event.x, event.y) != "heading":
@@ -536,12 +561,23 @@ class App(tk.Tk):
         self._say("중지를 요청했습니다. 지금 점검 중인 페이지를 마치고 멈춥니다.")
 
     def _poll_events(self):
+        progress = None
         try:
             while True:
-                self._handle_event(self.events.get_nowait())
+                event = self.events.get_nowait()
+                if event[0] == "progress":
+                    progress = event
+                    continue
+                if event[0] in ("done", "error") and progress:
+                    self._handle_event(progress)
+                    progress = None
+                self._handle_event(event)
         except queue.Empty:
             pass
-        self.after(100, self._poll_events)
+        if progress:
+            self._handle_event(progress)
+        self._flush_log()
+        self.after(POLL_MS, self._poll_events)
 
     def _handle_event(self, event: tuple):
         kind = event[0]
@@ -596,12 +632,27 @@ class App(tk.Tk):
             self.simple_log.append(line)
             del self.simple_log[:-MAX_LOG_LINES]
         if simple or self.show_detail_log.get():
-            self.log.configure(state="normal")
-            self.log.insert("end", line + "\n")
-            self.log.see("end")
-            self.log.configure(state="disabled")
+            self.pending_log.append(line)
+            if not self.log_job:
+                self.log_job = self.after(POLL_MS, self._flush_log)
+
+    def _flush_log(self):
+        if self.log_job:
+            self.after_cancel(self.log_job)
+            self.log_job = None
+        if not self.pending_log:
+            return
+        lines, self.pending_log = self.pending_log, []
+        self.log.configure(state="normal")
+        self.log.insert("end", "\n".join(lines[-MAX_LOG_LINES:]) + "\n")
+        excess = int(self.log.index("end-1c").split(".")[0]) - 1 - MAX_LOG_LINES
+        if excess > 0:
+            self.log.delete("1.0", f"{excess + 1}.0")
+        self.log.see("end")
+        self.log.configure(state="disabled")
 
     def _render_log(self):
+        self.pending_log = []
         lines = self.detail_log if self.show_detail_log.get() else self.simple_log
         self.log.configure(state="normal")
         self.log.delete("1.0", "end")
@@ -878,17 +929,47 @@ def _bold_font() -> tuple:
     return (base.actual("family"), base.actual("size"), "bold")
 
 
-def _apply_theme(root: tk.Tk, scale: float):
+def load_ui_settings() -> dict:
     try:
-        import sv_ttk
-        sv_ttk.set_theme("light")
-    except Exception:
+        data = json.loads((app_dir() / UI_SETTINGS_FILE).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_ui_settings(settings: dict) -> None:
+    try:
+        (app_dir() / UI_SETTINGS_FILE).write_text(json.dumps(settings, ensure_ascii=False), encoding="utf-8")
+    except OSError:
         pass
+
+
+def light_theme_name(style: ttk.Style) -> str:
+    names = style.theme_names()
+    return next((n for n in ("vista", "xpnative", "winnative", "clam") if n in names), style.theme_use())
+
+
+def _theme_background(root: tk.Misc) -> str:
+    return ttk.Style(root).lookup("TFrame", "background") or "#f0f0f0"
+
+
+def _apply_theme(root: tk.Tk, scale: float, light: bool = False):
+    style = ttk.Style(root)
+    if light:
+        style.theme_use(light_theme_name(style))
+    else:
+        try:
+            import sv_ttk
+            sv_ttk.set_theme("light")
+        except Exception:
+            pass
+    scaled = root.__dict__.setdefault("_scaled_fonts", set())
     families = set(font.families(root))
     korean = next((f for f in KOREAN_FONTS if f in families), None)
     for name in font.names(root):
-        if not name.startswith(("Tk", "SunValley")) or name == "TkFixedFont":
+        if not name.startswith(("Tk", "SunValley")) or name == "TkFixedFont" or name in scaled:
             continue
+        scaled.add(name)
         f = font.nametofont(name)
         options = {}
         size = int(f.cget("size"))

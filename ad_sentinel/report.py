@@ -52,6 +52,8 @@ def stats_lines(report: dict) -> list[str]:
              f"점검한 iframe: {st.get('iframes', 0)}개",
              f"검사한 요소: {st.get('elements_scanned', 0):,}개",
              f"점검하지 못한 영역: {st.get('unchecked', 0)}곳"]
+    if st.get("duplicate_pages"):
+        lines.append(f"내용이 같은 페이지 {st['duplicate_pages']}개(중복, 주소만 다르고 화면이 같음)")
     if st.get("duration_sec") is not None:
         minutes, seconds = divmod(st["duration_sec"], 60)
         lines.append(f"소요 시간: {minutes}분 {seconds}초" if minutes else f"소요 시간: {seconds}초")

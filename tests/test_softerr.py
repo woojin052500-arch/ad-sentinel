@@ -143,3 +143,26 @@ def test_exit_words_are_not_gate_candidates():
     for text in ["홈으로돌아가기", "메인으로", "뒤로가기", "이전페이지", "처음으로", "gohome", "back"]:
         assert re.search(EXIT_PATTERN, text, re.IGNORECASE)
     assert "홈으로" not in GATE_WORDS and "홈으로" not in GATE_PARTS and "메인으로" not in GATE_PARTS
+
+
+def test_repeated_screen_warning_only_for_home_redirect_or_gate():
+    from ad_sentinel.config import CrawlConfig
+    from ad_sentinel.crawler import Crawler
+
+    crawler = Crawler(CrawlConfig(start_url="https://www.example.go.kr/"))
+
+    def page(url, final=None, title="화면", text="본문 " * 20, gate=None):
+        return {"url": url, "final_url": final or url, "title": title, "gate": gate, "gate_rejected": None,
+                "frames": [{"is_main": True, "text": text}]}
+
+    crawler._track_screen(page("https://www.example.go.kr/", title="홈", text="홈 화면 " * 20))
+    for i in range(3):
+        crawler._track_screen(page(f"https://www.example.go.kr/search?q={i}", title="검색", text="검색 결과 " * 20))
+    for i in range(3):
+        crawler._track_screen(page(f"https://www.example.go.kr/old/{i}", final="https://www.example.go.kr/moved",
+                                   title="이동", text="이동한 화면 " * 20))
+    for i in range(3):
+        crawler._track_screen(page(f"https://www.example.go.kr/post/{i}", title="홈", text="홈 화면 " * 20))
+    suspect = dict(zip(["홈", "검색", "이동"], (crawler.screen_suspect.get(key, False) for key in crawler.screens)))
+    assert suspect == {"홈": True, "검색": False, "이동": True}
+    assert len(crawler.repeat_warned) == 2

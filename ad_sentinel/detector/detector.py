@@ -224,6 +224,7 @@ class Detector:
             "iframes": sum(1 for f in frames if not f.get("is_main") and not f.get("error")),
             "elements_scanned": sum(f.get("scanned", 0) for f in frames),
             "unchecked": unchecked_count,
+            "duplicate_pages": sum(d["count"] - 1 for d in meta.get("duplicate_screens") or []),
             "duration_sec": duration,
             "stopped_by_user": bool(meta.get("stopped_by_user")),
         }
@@ -346,11 +347,15 @@ class Detector:
                 evidence.append(_ev("cloaking", f"일반 PC 화면과 내용이 크게 다름 (같은 단어 {similarity:.0%})",
                                     POINTS_CLOAKING_DIFF))
 
-            content = _snippet(text, new_hits[0].original if new_hits else "") or (redirects[0] if redirects else "")
+            content = _new_ad_text(base, snap, new_hits)
+            if not content and redirects:
+                content = f"다른 사이트로 이동: {redirects[0]}"
+            content = content or _snippet(text, "")
             rec = {"type": "cloaking", "selector": f"[{label}]", "content": content, "frame_path": [],
                    "frame_url": page.get("final_url") or page["url"], "links": (redirects + new_links)[:10]}
             finding = self._finding(rec, evidence, categories or ["기타"], page["url"])
             if finding:
+                finding["pattern_label"] = f"{PATTERN_LABELS[CLOAKING]}({label})"
                 finding["cloaking"] = {"profile": key, "label": label, "only_in": only_in,
                                        "similarity": round(similarity, 2),
                                        "new_keywords": [h.keyword.word for h in new_hits],
@@ -524,6 +529,17 @@ def _similarity(a: str, b: str) -> float:
     if not wa and not wb:
         return 1.0
     return len(wa & wb) / len(wa | wb)
+
+
+def _new_ad_text(base: dict, snap: dict, hits: list) -> str:
+    seen = {" ".join(line.split()) for line in _snapshot_text(base).splitlines()}
+    candidates = [snap.get("title", "")] + snap.get("text", "").splitlines() + snap.get("hidden", [])
+    fresh = [" ".join(c.split()) for c in candidates if c.strip() and " ".join(c.split()) not in seen]
+    words = [h.original for h in hits if h.original] + [h.keyword.word for h in hits]
+    for line in fresh:
+        if any(w and w.lower() in line.lower() for w in words) or find_contact(line):
+            return line[:200]
+    return fresh[0][:200] if fresh and hits else ""
 
 
 def _snippet(text: str, word: str, around: int = 80) -> str:

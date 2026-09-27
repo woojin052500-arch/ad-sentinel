@@ -71,6 +71,8 @@ class Crawler:
         self.gate_rejections = 0
         self.gate_disabled = False
         self.screens: dict[int, list[str]] = {}
+        self.screen_suspect: dict[int, bool] = {}
+        self.home_screen: int | None = None
         self.repeat_warned: set[int] = set()
         self.throttle_streak = 0
         self.forbidden_streak = 0
@@ -191,7 +193,11 @@ class Crawler:
         result["meta"]["gate"] = next((p["gate"] for p in result["pages"] if p.get("gate")), None)
         result["meta"]["repeated_screens"] = [
             {"title": self._screen_title(result, urls[0]), "count": len(urls), "urls": urls[:10]}
-            for urls in self.screens.values() if len(urls) >= REPEAT_WARN
+            for key, urls in self.screens.items() if len(urls) >= REPEAT_WARN and self.screen_suspect.get(key)
+        ]
+        result["meta"]["duplicate_screens"] = [
+            {"title": self._screen_title(result, urls[0]), "count": len(urls), "urls": urls[:10]}
+            for key, urls in self.screens.items() if len(urls) >= 2 and not self.screen_suspect.get(key)
         ]
         result["meta"]["gate_rejections"] = self.gate_rejections
         result["meta"]["notes"] = self._notes(mode, result)
@@ -213,10 +219,16 @@ class Crawler:
         if len(text) < 20:
             return
         key = hash((page_result.get("title") or "", text))
+        if self.home_screen is None:
+            self.home_screen = key
+        moved = normalize_url(page_result.get("final_url") or "") not in ("", normalize_url(page_result["url"]))
+        reclicked = bool(page_result.get("gate") or page_result.get("gate_rejected"))
+        if key == self.home_screen or moved or reclicked:
+            self.screen_suspect[key] = True
         urls = self.screens.setdefault(key, [])
         if page_result["url"] not in urls:
             urls.append(page_result["url"])
-        if len(urls) >= REPEAT_WARN and key not in self.repeat_warned:
+        if len(urls) >= REPEAT_WARN and self.screen_suspect.get(key) and key not in self.repeat_warned:
             self.repeat_warned.add(key)
             notice.warning("게시글 대신 같은 화면이 반복 점검되고 있습니다: 제목 '%s'인 화면이 서로 다른 주소 %d곳에서 똑같이 "
                            "나왔습니다. (예: %s)", page_result.get("title") or "(제목 없음)", len(urls), ", ".join(urls[:3]))
@@ -783,6 +795,8 @@ class Crawler:
             return [f"사이트가 요청을 계속 제한해({result['meta']['blocked_reason']}) {checked}페이지까지만 점검하고 멈췄습니다. "
                     f"고급 설정에서 요청 간격을 늘리거나(현재 {self.delay:g}초) 잠시 뒤 다시 점검해 보세요."]
         if mode != "site" or result["meta"]["stopped_by_user"] or not pages:
+            return []
+        if cfg.max_pages <= 1 or cfg.max_depth == 0:
             return []
         linked = [p for p in pages[1:] if {p["url"], p.get("final_url")} & self.content_linked]
         gate = result["meta"].get("gate")

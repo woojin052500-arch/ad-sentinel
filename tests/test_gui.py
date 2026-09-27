@@ -74,6 +74,7 @@ def test_simple_and_detail_log(app):
     assert _page_message(1, page, 2, 1) == "1번째 페이지 점검 완료: 테스트 기관 (의심 2건, 점검하지 못한 영역 1곳)"
     app._say("쉬운 문구")
     app._add_log("  프레임 1/1 메인 0.01s", simple=False)
+    app._flush_log()
     assert "쉬운 문구" in app.log.get("1.0", "end") and "프레임" not in app.log.get("1.0", "end")
     app.show_detail_log.set(True)
     app._render_log()
@@ -118,6 +119,7 @@ def test_gate_option_and_notices(app):
     app.show_detail_log.set(False)
 
     app._handle_event(("notice", "입장 버튼('입장하기') 클릭 후 점검 계속 (링크 0개 → 3개)"))
+    app._flush_log()
     assert "입장 버튼('입장하기') 클릭 후 점검 계속" in app.log.get("1.0", "end")
 
     crawl = _crawl()
@@ -239,8 +241,56 @@ def test_cloaking_option_and_detail(app):
     report = detect(crawl)
     app._show_report(crawl, report)
     first = app.table.get_children()[0]
-    assert app.table.item(first)["values"][1] == "클로킹 의심"
+    assert app.table.item(first)["values"][1] == "클로킹 의심(구글봇)"
     app.table.selection_set(first)
     app._on_select()
     text = app.detail.get("1.0", "end")
     assert "클로킹 비교 (구글봇)" in text and "구글봇으로 볼 때만 나타남" in text and "win777-casino.invalid" in text
+
+
+def test_log_updates_are_batched_and_trimmed(app, monkeypatch):
+    import ad_sentinel.gui.app as gui
+
+    monkeypatch.setattr(gui, "MAX_LOG_LINES", 50)
+    for i in range(120):
+        app._say(f"줄 {i}")
+    assert "줄 0" not in app.log.get("1.0", "end")
+    assert len(app.pending_log) == 120 and app.log_job
+    app._flush_log()
+    text = app.log.get("1.0", "end")
+    assert "줄 119" in text and "줄 60" not in text
+    assert int(app.log.index("end-1c").split(".")[0]) - 1 <= 50
+
+
+def test_progress_events_are_coalesced(app, monkeypatch):
+    handled = []
+    original = app._handle_event
+    monkeypatch.setattr(app, "_handle_event", lambda e: (handled.append(e[0]), original(e)))
+    for i in range(30):
+        app.events.put(("progress", i, 30, f"https://www.example.go.kr/{i}"))
+    app.events.put(("notice", "안내"))
+    app._poll_events()
+    assert handled.count("progress") == 1 and "notice" in handled
+    assert app.progress["value"] == 29
+
+
+def test_light_ui_toggle_is_saved(app, monkeypatch, tmp_path):
+    import ad_sentinel.gui.app as gui
+
+    monkeypatch.setattr(gui, "app_dir", lambda: tmp_path)
+    style = ttk_style(app)
+    app.light_ui.set(True)
+    app._toggle_light_ui()
+    assert style.theme_use() == gui.light_theme_name(style)
+    assert json.loads((tmp_path / gui.UI_SETTINGS_FILE).read_text(encoding="utf-8")) == {"light_ui": True}
+    assert gui.load_ui_settings() == {"light_ui": True}
+    app.light_ui.set(False)
+    app._toggle_light_ui()
+    assert style.theme_use() != gui.light_theme_name(style)
+    assert "light_ui" in app.help_icons
+
+
+def ttk_style(app):
+    from tkinter import ttk
+
+    return ttk.Style(app)
