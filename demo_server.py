@@ -61,7 +61,7 @@ def main():
     print(" AD Sentinel 시연용 샘플 사이트가 열렸습니다. (불법광고를 일부러 숨겨 둔 가짜 기관 사이트)")
     print("=" * 70)
     print(f" ① 사이트 점검 시연 : 시작 주소에 {base}index.html 입력 → 점검 시작")
-    print("    - 숨김 광고 6건, 노출 광고 2건이 발견됩니다. (display:none, 글자색=배경색, 화면 밖, 1px iframe 등)")
+    print("    - 숨김 광고 6건, 노출 광고 3건이 발견됩니다. (display:none, 글자색=배경색, 화면 밖, 1px iframe, ⓒⓐⓢⓘⓝⓞ 같은 감싼 문자 등)")
     print("    - robots.txt로 막힌 관리자 페이지 1곳은 '점검하지 못한 영역'으로 표시됩니다.")
     print(" ② URL 목록 점검 시연: '목록 파일 불러오기'에서 아래 파일 선택 → 점검 시작")
     print(f"    {url_list}")

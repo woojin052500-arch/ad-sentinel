@@ -105,3 +105,60 @@ def test_single_variant_alone_is_not_ad(text):
 def test_real_mois_data_still_has_no_findings():
     sample = json.loads((FIXTURES / "mois_sample.json").read_text(encoding="utf-8"))
     assert detect(sample)["findings"] == []
+
+
+@pytest.mark.parametrize("text,word,method", [
+    ("ⓒⓐⓢⓘⓝⓞ", "casino", "enclosed"),
+    ("ⓑⓐⓒⓒⓐⓡⓐⓣ", "baccarat", "enclosed"),
+    ("㉳㉸㉱ 추천", "바카라", "enclosed"),
+    ("⒞⒜⒮⒤⒩⒪", "casino", "enclosed"),
+    ("🄲🄰🅂🄸🄽🄾", "casino", "enclosed"),
+    ("🅒🅐🅢🅘🅝🅞", "casino", "enclosed"),
+    ("🅲🅰🆂🅸🅽🅾", "casino", "enclosed"),
+    ("🅟🅞🅡🅝", "porn", "enclosed"),
+    ("𝐜𝐚𝐬𝐢𝐧𝐨", "casino", "styled"),
+    ("𝓬𝓪𝓼𝓲𝓷𝓸", "casino", "styled"),
+    ("𝕔𝕒𝕤𝕚𝕟𝕠", "casino", "styled"),
+    ("ᶜᵃˢⁱⁿᵒ", "casino", "styled"),
+    ("ᴄᴀꜱɪɴᴏ", "casino", "styled"),
+    ("cⓐ𝐬ino", "casino", "enclosed"),
+    ("c𝐚sino", "casino", "styled"),
+])
+def test_enclosed_and_styled_letters_keep_full_weight(text, word, method):
+    hits = {h.keyword.word: h for h in analyze(text)}
+    assert word in hits, [(h.keyword.word, h.method) for h in analyze(text)]
+    hit = hits[word]
+    assert hit.method == method and hit.original == text.split()[0]
+    assert hit.weight == hit.keyword.weight
+
+
+@pytest.mark.parametrize("disguised,plain", [
+    ("ⓒⓐⓢⓘⓝⓞ 바로가기 텔레그램 @win777", "casino 바로가기 텔레그램 @win777"),
+    ("🅲🅰🆂🅸🅽🅾 바로가기", "casino 바로가기"),
+    ("㉳㉸㉱ 가입코드 777", "바카라 가입코드 777"),
+])
+def test_enclosed_scores_same_as_plain_text(disguised, plain):
+    detector = Detector(_crawl())
+    f = detector.score(_rec("link", disguised, href="http://win777.invalid/"))
+    g = detector.score(_rec("link", plain, href="http://win777.invalid/"))
+    assert (f["score"], f["level"]) == (g["score"], g["level"])
+    label = next(e["label"] for e in f["evidence"] if e["kind"] == "variant")
+    assert f"변형 표기: {disguised.split()[0]} → " in label and "감싼 문자" in label
+
+
+def test_circled_chosung_is_read_as_chosung():
+    hits = {h.keyword.word: h for h in analyze("㉥㉪㉣ 가입")}
+    assert hits["바카라"].method == "chosung"
+
+
+@pytest.mark.parametrize("text", [
+    "① 신청서 작성 ② 서류 제출 ③ 심사 결과 안내",
+    "⑴ 대상 ⑵ 기간 ⒜ 신청 방법 ⒝ 제출 서류",
+    "Copyright ⓒ 2024 행정안전부. All rights reserved.",
+    "ⓒ 한국지능정보사회진흥원 ㈜한국정보통신 ㈔한국웹접근성협회",
+    "❶ 공지 ➋ 안내 ⓫ 기타 🄰 등급 🅐 구역",
+    "ᴴᴰ 화질 영상 m² km³ H₂O",
+])
+def test_normal_enclosed_characters_are_not_ads(text):
+    assert analyze(text) == []
+    assert detect(_crawl(_rec("text", text), _rec("link", text, href="https://www.korea.kr/")))["findings"] == []

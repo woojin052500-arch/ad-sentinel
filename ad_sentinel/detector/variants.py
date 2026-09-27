@@ -18,6 +18,55 @@ HOMOGLYPHS = str.maketrans({
 })
 
 CHOSUNG = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ"
+CONJOINING_CHOSUNG = str.maketrans({chr(0x1100 + i): c for i, c in enumerate(CHOSUNG)})
+
+ENCLOSED, STYLED = "enclosed", "styled"
+ENCLOSED_TAGS = {"<circle>", "<square>"}
+STYLED_TAGS = {"<font>", "<super>", "<sub>"}
+ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+def _extra_letters() -> dict[str, tuple[str, str]]:
+    table = {}
+    for base in (0x1F150, 0x1F170, 0x1F1E6):
+        for i, letter in enumerate(ALPHABET):
+            table[chr(base + i)] = (letter, ENCLOSED)
+    for base in (0x2776, 0x2780, 0x278A):
+        for i in range(10):
+            table[chr(base + i)] = (str(i + 1), ENCLOSED)
+    for i in range(10):
+        table[chr(0x24EB + i)] = (str(i + 11), ENCLOSED)
+    for ch in ("⓿", "\U0001F10B", "\U0001F10C"):
+        table[ch] = ("0", ENCLOSED)
+    for letter in ALPHABET:
+        try:
+            table[unicodedata.lookup(f"LATIN LETTER SMALL CAPITAL {letter}")] = (letter.lower(), STYLED)
+        except KeyError:
+            pass
+    return table
+
+
+EXTRA_LETTERS = _extra_letters()
+
+
+def letter_style(ch: str) -> str:
+    if ch in EXTRA_LETTERS:
+        return EXTRA_LETTERS[ch][1]
+    tag, _, rest = unicodedata.decomposition(ch).partition(" ")
+    if tag in ENCLOSED_TAGS or (tag == "<compat>" and rest.startswith("0028 ") and rest.endswith(" 0029")):
+        return ENCLOSED
+    if tag in STYLED_TAGS:
+        return STYLED
+    return ""
+
+
+def _plain(ch: str) -> str:
+    if ch in EXTRA_LETTERS:
+        return EXTRA_LETTERS[ch][0]
+    plain = unicodedata.normalize("NFKC", ch)
+    if len(plain) > 2 and plain[0] == "(" and plain[-1] == ")" and letter_style(ch) == ENCLOSED:
+        plain = plain[1:-1]
+    return plain.translate(CONJOINING_CHOSUNG)
 JUNGSUNG = "ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ"
 JONGSUNG = ["", "ㄱ", "ㄲ", "ㄳ", "ㄴ", "ㄵ", "ㄶ", "ㄷ", "ㄹ", "ㄺ", "ㄻ", "ㄼ", "ㄽ", "ㄾ", "ㄿ", "ㅀ", "ㅁ",
             "ㅂ", "ㅄ", "ㅅ", "ㅆ", "ㅇ", "ㅈ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ"]
@@ -50,6 +99,8 @@ FINAL_PAIRS = {("ㄱ", "ㅅ"): "ㄳ", ("ㄴ", "ㅈ"): "ㄵ", ("ㄴ", "ㅎ"): "�
 
 VARIANT_LABELS = {
     "normalize": "보이지 않는 문자·전각·닮은꼴 문자",
+    ENCLOSED: "감싼 문자",
+    STYLED: "특수 글꼴·첨자 문자",
     "symbols": "기호 삽입",
     "spaces": "띄어쓰기 변형",
     "digits": "숫자·영문 치환",
@@ -57,7 +108,7 @@ VARIANT_LABELS = {
     "chosung": "초성 표기",
     "keyboard": "한영 자판 변환",
 }
-FULL_WEIGHT_METHODS = {"normalize", "symbols"}
+FULL_WEIGHT_METHODS = {"normalize", "symbols", ENCLOSED, STYLED}
 
 
 @dataclass
@@ -87,7 +138,7 @@ def normalize(text: str) -> tuple[str, list[int]]:
         if INVISIBLE.match(ch) or unicodedata.combining(ch):
             continue
         if not (_is_hangul_syllable(ch) or _is_hangul_jamo(ch)):
-            ch = unicodedata.normalize("NFKC", ch)
+            ch = _plain(ch)
         for c in ch.translate(HOMOGLYPHS):
             if unicodedata.combining(c):
                 continue
@@ -179,6 +230,8 @@ def analyze(text: str) -> list[Hit]:
     hits: dict[str, Hit] = {}
 
     def add(kw: Keyword, method: str, original: str, reading: str = ""):
+        if method == "normalize":
+            method = _style_method(original) or method
         weight = kw.weight if method in ("exact", *FULL_WEIGHT_METHODS) else _lower_weight(kw)
         current = hits.get(kw.word)
         if current is None or weight > current.weight:
@@ -234,6 +287,13 @@ def analyze(text: str) -> list[Hit]:
                 add(kw, "keyboard", _original(text, index, m.start(), m.end()), converted)
 
     return list(hits.values())
+
+
+def _style_method(original: str) -> str:
+    styles = {letter_style(ch) for ch in original}
+    if ENCLOSED in styles:
+        return ENCLOSED
+    return STYLED if STYLED in styles else ""
 
 
 def evidence_label(hit: Hit) -> str:
