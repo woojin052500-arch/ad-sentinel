@@ -162,3 +162,52 @@ def test_circled_chosung_is_read_as_chosung():
 def test_normal_enclosed_characters_are_not_ads(text):
     assert analyze(text) == []
     assert detect(_crawl(_rec("text", text), _rec("link", text, href="https://www.korea.kr/")))["findings"] == []
+
+
+@pytest.mark.parametrize("text,word,original", [
+    ("çâśîñö 바로가기", "casino", "çâśîñö"),
+    ("ƥóŕñ", "porn", "ƥóŕñ"),
+    ("pørn", "porn", "pørn"),
+    ("ćàšíñø", "casino", "ćàšíñø"),
+    ("bàççàràt", "baccarat", "bàççàràt"),
+    ("vïágrà", "viagra", "vïágrà"),
+    ("cásino", "casino", "cásino"),
+])
+def test_accented_letters_keep_full_weight(text, word, original):
+    hits = {h.keyword.word: h for h in analyze(text)}
+    assert word in hits, [(h.keyword.word, h.method) for h in analyze(text)]
+    hit = hits[word]
+    assert (hit.method, hit.original, hit.weight) == ("accent", original, hit.keyword.weight)
+
+
+def test_accent_letters_are_stripped_for_reading():
+    assert normalize("ĥéĺĺö")[0] == "hello"
+    assert normalize("ø đ ł ı ƥ")[0] == "o d l i p"
+
+
+def test_accent_evidence_label_and_score():
+    detector = Detector(_crawl())
+    f = detector.score(_rec("link", "çâśîñö 바로가기", href="http://win777.invalid/"))
+    g = detector.score(_rec("link", "casino 바로가기", href="http://win777.invalid/"))
+    assert (f["score"], f["level"]) == (g["score"], g["level"])
+    label = next(e["label"] for e in f["evidence"] if e["kind"] == "variant")
+    assert "변형 표기: çâśîñö → casino, 악센트 문자" in label
+
+
+@pytest.mark.parametrize("text", [
+    "café résumé naïve façade déjà vu",
+    "Zürich São Paulo Ångström Łódź Øresund İstanbul Dvořák",
+    "Tôi yêu Việt Nam. Đà Nẵng và Hà Nội",
+    "El niño comió jalapeños en la montaña",
+])
+def test_normal_accented_words_are_not_ads(text):
+    assert analyze(text) == []
+    assert detect(_crawl(_rec("text", text)))["findings"] == []
+
+
+@pytest.mark.parametrize("text", ["바카라", "한글은 자모로 쪼개지지 않습니다", "ㄱㄴㄷ ㅏㅑㅓ", "㉳㉸㉱"])
+def test_hangul_is_not_decomposed(text):
+    norm = normalize(text)[0]
+    assert all(not ("ᄀ" <= c <= "ᇿ") for c in norm)
+    if text != "㉳㉸㉱":
+        assert norm == text

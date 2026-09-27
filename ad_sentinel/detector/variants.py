@@ -20,7 +20,7 @@ HOMOGLYPHS = str.maketrans({
 CHOSUNG = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ"
 CONJOINING_CHOSUNG = str.maketrans({chr(0x1100 + i): c for i, c in enumerate(CHOSUNG)})
 
-ENCLOSED, STYLED = "enclosed", "styled"
+ENCLOSED, STYLED, ACCENT = "enclosed", "styled", "accent"
 ENCLOSED_TAGS = {"<circle>", "<square>"}
 STYLED_TAGS = {"<font>", "<super>", "<sub>"}
 ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -48,6 +48,17 @@ def _extra_letters() -> dict[str, tuple[str, str]]:
 
 EXTRA_LETTERS = _extra_letters()
 
+ACCENT_LETTERS = {
+    "ø": "o", "Ø": "O", "đ": "d", "Đ": "D", "ł": "l", "Ł": "L", "ı": "i", "ƥ": "p", "Ƥ": "P", "ħ": "h", "Ħ": "H",
+    "ŧ": "t", "Ŧ": "T", "ƀ": "b", "Ƀ": "B", "ɓ": "b", "Ɓ": "B", "ƈ": "c", "Ƈ": "C", "ȼ": "c", "Ȼ": "C",
+    "ɗ": "d", "Ɗ": "D", "ɖ": "d", "Ɖ": "D", "ɇ": "e", "Ɇ": "E", "ƒ": "f", "Ƒ": "F", "ɠ": "g", "Ɠ": "G",
+    "ǥ": "g", "Ǥ": "G", "ɦ": "h", "ɨ": "i", "Ɨ": "I", "ɉ": "j", "Ɉ": "J", "ʝ": "j", "ƙ": "k", "Ƙ": "K",
+    "ƚ": "l", "Ƚ": "L", "ɫ": "l", "ɬ": "l", "ɱ": "m", "ɲ": "n", "Ɲ": "N", "ƞ": "n", "Ƞ": "N", "ɵ": "o",
+    "Ɵ": "O", "ᵽ": "p", "Ᵽ": "P", "ʠ": "q", "ɍ": "r", "Ɍ": "R", "ɽ": "r", "ʂ": "s", "ȿ": "s", "ƭ": "t",
+    "Ƭ": "T", "ʈ": "t", "Ʈ": "T", "ʉ": "u", "Ʉ": "U", "ʋ": "v", "Ʋ": "V", "ⱳ": "w", "Ⱳ": "W", "ƴ": "y",
+    "Ƴ": "Y", "ɏ": "y", "Ɏ": "Y", "ƶ": "z", "Ƶ": "Z", "ȥ": "z", "Ȥ": "Z", "ʐ": "z", "ʑ": "z",
+}
+
 
 def letter_style(ch: str) -> str:
     if ch in EXTRA_LETTERS:
@@ -57,7 +68,23 @@ def letter_style(ch: str) -> str:
         return ENCLOSED
     if tag in STYLED_TAGS:
         return STYLED
+    if ch in ACCENT_LETTERS or unicodedata.category(ch) == "Mn" or (
+            tag and not tag.startswith("<") and any(unicodedata.category(chr(int(c, 16))) == "Mn" for c in tag.split()
+                                                    + rest.split())):
+        return ACCENT
     return ""
+
+
+def _strip_accents(text: str) -> str:
+    out = []
+    for c in text:
+        if c in ACCENT_LETTERS:
+            out.append(ACCENT_LETTERS[c])
+        elif _is_hangul_syllable(c) or _is_hangul_jamo(c) or c.isascii():
+            out.append(c)
+        else:
+            out.append("".join(d for d in unicodedata.normalize("NFKD", c) if unicodedata.category(d) != "Mn") or c)
+    return "".join(out)
 
 
 def _plain(ch: str) -> str:
@@ -66,7 +93,7 @@ def _plain(ch: str) -> str:
     plain = unicodedata.normalize("NFKC", ch)
     if len(plain) > 2 and plain[0] == "(" and plain[-1] == ")" and letter_style(ch) == ENCLOSED:
         plain = plain[1:-1]
-    return plain.translate(CONJOINING_CHOSUNG)
+    return _strip_accents(plain.translate(CONJOINING_CHOSUNG))
 JUNGSUNG = "ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ"
 JONGSUNG = ["", "ㄱ", "ㄲ", "ㄳ", "ㄴ", "ㄵ", "ㄶ", "ㄷ", "ㄹ", "ㄺ", "ㄻ", "ㄼ", "ㄽ", "ㄾ", "ㄿ", "ㅀ", "ㅁ",
             "ㅂ", "ㅄ", "ㅅ", "ㅆ", "ㅇ", "ㅈ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ"]
@@ -100,6 +127,7 @@ FINAL_PAIRS = {("ㄱ", "ㅅ"): "ㄳ", ("ㄴ", "ㅈ"): "ㄵ", ("ㄴ", "ㅎ"): "�
 VARIANT_LABELS = {
     "normalize": "보이지 않는 문자·전각·닮은꼴 문자",
     ENCLOSED: "감싼 문자",
+    ACCENT: "악센트 문자",
     STYLED: "특수 글꼴·첨자 문자",
     "symbols": "기호 삽입",
     "spaces": "띄어쓰기 변형",
@@ -108,7 +136,7 @@ VARIANT_LABELS = {
     "chosung": "초성 표기",
     "keyboard": "한영 자판 변환",
 }
-FULL_WEIGHT_METHODS = {"normalize", "symbols", ENCLOSED, STYLED}
+FULL_WEIGHT_METHODS = {"normalize", "symbols", ENCLOSED, STYLED, ACCENT}
 
 
 @dataclass
@@ -293,7 +321,9 @@ def _style_method(original: str) -> str:
     styles = {letter_style(ch) for ch in original}
     if ENCLOSED in styles:
         return ENCLOSED
-    return STYLED if STYLED in styles else ""
+    if STYLED in styles:
+        return STYLED
+    return ACCENT if ACCENT in styles else ""
 
 
 def evidence_label(hit: Hit) -> str:
