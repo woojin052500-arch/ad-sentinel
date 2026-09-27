@@ -1,3 +1,4 @@
+import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -5,8 +6,9 @@ from datetime import datetime
 from ad_sentinel import __version__
 from ad_sentinel.crawler.url_utils import get_host, is_same_site
 from ad_sentinel.detector.domains import is_whitelisted, load_whitelist, suspicious_domain
-from ad_sentinel.detector.keywords import find_keywords, has_contact
-from ad_sentinel.detector.variants import analyze, evidence_label
+from ad_sentinel.detector.keywords import (find_contact, find_keyword_spans, find_keywords, has_contact,
+                                           is_prevention_context)
+from ad_sentinel.detector.variants import analyze, evidence_label, normalize
 from ad_sentinel.detector.reflection import is_search_param, query_params, reflected_params, strip_values
 
 HIGH = "high"
@@ -19,16 +21,42 @@ POINTS_REDIRECT = 3
 POINTS_EXTERNAL = 1
 POINTS_CONTACT = 1
 POINTS_REFLECTION = 2
+POINTS_TELEGRAM = 2
+POINTS_CLOAKING = 3
+POINTS_CLOAKING_DIFF = 1
+CLOAKING_SIMILARITY = 0.5
+POINTS_SEARCH_LIST = 2
+POINTS_STUFFING = 3
+POINTS_STUFFING_DENSITY = 2
+POINTS_STUFFING_LIST = 2
+
+STUFFING_MIN_COUNT = 20
+STUFFING_MIN_KINDS = 3
+STUFFING_MIN_REPEAT = 2.0
+STUFFING_DENSITY = 0.2
+STUFFING_LIST_LINES = 3
+STUFFING_LINE_RATIO = 0.5
+HIDDEN_LOCATION_LABELS = {
+    "meta": "검색엔진용 정보({field})에만 들어 있음",
+    "alt": "이미지 대체 텍스트(alt)에 들어 있음",
+    "noscript": "noscript 안(스크립트가 꺼진 환경·검색엔진에만 보임)",
+}
 
 REFLECTION = "param_reflection"
 SURFACE = "reflection_surface"
 REDIRECT = "redirect"
 HIDDEN = "hidden"
 VISIBLE = "visible"
+SEARCH_LIST = "search_list"
+STUFFING = "stuffing"
+CLOAKING = "cloaking"
 PATTERN_LABELS = {
     REFLECTION: "URL 파라미터 반사",
     SURFACE: "악용 가능 지점",
     REDIRECT: "자동 이동",
+    CLOAKING: "클로킹 의심",
+    STUFFING: "키워드 도배",
+    SEARCH_LIST: "검색어 목록 오염",
     HIDDEN: "숨김 광고",
     VISIBLE: "노출 광고",
 }
@@ -40,6 +68,14 @@ ADVICE = {
     REDIRECT: "다른 사이트로 자동 이동시키는 코드가 있습니다. 페이지 소스와 서버 파일의 변조 여부를 점검하세요.",
     HIDDEN: "화면에 보이지 않게 숨겨진 광고입니다. 해당 요소를 삭제하고 게시판·편집기의 입력 필터와 계정 보안을 점검하세요.",
     VISIBLE: "화면에 노출된 광고입니다. 게시글·댓글을 삭제하고 작성 경로(게시판, 댓글 등)의 스팸 차단 설정을 점검하세요.",
+    SEARCH_LIST: "사이트 내 검색어 목록(인기·최근 검색어 등)에 광고 문구가 올라 있습니다. 광고 문구를 반복 검색해 목록과 "
+                 "검색엔진에 노출시키는 수법입니다. 해당 검색어를 삭제하고 금칙어(텔레그램 ID, 마약·환전 용어 등) 필터와 "
+                 "검색어 목록 자동 노출 여부를 점검하세요.",
+    STUFFING: "광고 키워드가 부자연스럽게 반복된 페이지로, 해킹으로 만들어진 스팸 페이지(해킹 생성 페이지)일 수 있습니다. "
+              "서버의 파일·게시물 생성 이력과 관리자 계정을 점검하고, 페이지를 삭제한 뒤 검색엔진에 삭제를 요청하세요.",
+    CLOAKING: "접속하는 방식(구글봇, 구글 검색 경유, 모바일)에 따라 다른 내용을 보여 주는 클로킹이 의심됩니다. 관리자가 "
+              "주소를 직접 입력하면 정상으로 보여 발견이 어렵습니다. 서버 설정(.htaccess 등)과 페이지·스크립트 파일의 변조 "
+              "여부를 점검하고, 구글 서치 콘솔의 'URL 검사'로 구글이 보는 화면도 확인하세요.",
 }
 MAX_CHILD_LINKS = 20
 UNCHECKED_LABELS = {"page": "페이지", "iframe": "iframe", "robots": "수집 금지 주소"}
@@ -215,6 +251,7 @@ class Detector:
                     if len(child_links[key]) < MAX_CHILD_LINKS:
                         child_links[key].append(e["href"])
 
+        prevention_page = is_prevention_context(" ".join([page.get("title") or "", page.get("listed_title") or ""]))
         results = []
         for rec in elements:
             for url in _urls_of(rec):
@@ -227,7 +264,7 @@ class Detector:
             frame_path = tuple(rec.get("frame_path", []))
             in_hidden_frame = any(frame_path[:i] in hidden_frames for i in range(1, len(frame_path) + 1))
             params = page_params if not frame_path else _unique(page_params + query_params(rec.get("frame_url", "")))
-            finding = self.score(rec, in_hidden_frame, params)
+            finding = self.score(rec, in_hidden_frame, params, prevention_page)
             if finding:
                 finding["page_url"] = page["url"]
                 finding["page_title"] = page.get("listed_title") or page.get("title") or ""
@@ -243,10 +280,106 @@ class Detector:
             if finding:
                 results.append(finding)
 
+        stuffing = self._stuffing(page)
+        if stuffing:
+            merged = [f for f in results if f["pattern"] == VISIBLE
+                      and all(e["kind"] in ("keyword", "variant") for e in f["evidence"])]
+            stuffing["stuffing"]["merged"] = len(merged)
+            stuffing["stuffing"]["examples"] = [f["content"][:80] for f in merged[:5]]
+            results = [f for f in results if f not in merged] + [stuffing]
+        if page.get("cloaking"):
+            results.extend(self._cloaking(page))
+
         return _drop_descendants(results)
 
+    def _cloaking(self, page: dict) -> list[dict]:
+        profiles = {p["key"]: p for p in page["cloaking"].get("profiles", [])}
+        base = profiles.get("pc")
+        if not base or base.get("error"):
+            return []
+        base_text = _snapshot_text(base)
+        base_words = {h.keyword.word for h in analyze(base_text)}
+        base_hosts = {get_host(u) for u in base.get("links", []) + base.get("redirects", [])}
+        base_contact = find_contact(base_text)
+        page_host = get_host(page.get("final_url") or page["url"])
+        results = []
+        for key, snap in profiles.items():
+            if key == "pc" or snap.get("error"):
+                continue
+            text = _snapshot_text(snap)
+            new_hits = [h for h in analyze(text) if h.keyword.word not in base_words]
+            redirects = [u for u in snap.get("redirects", []) if not self.is_trusted(u) and get_host(u) not in base_hosts]
+            final_host = get_host(snap.get("final_url", ""))
+            if final_host and final_host != page_host and not self.is_trusted(snap["final_url"]):
+                redirects.insert(0, snap["final_url"])
+            redirects = list(dict.fromkeys(redirects))
+            new_links = [u for u in snap.get("links", []) if not self.is_trusted(u) and get_host(u) not in base_hosts]
+            new_hosts = list(dict.fromkeys(get_host(u) for u in new_links))
+            suspicious = [h for h in new_hosts if suspicious_domain(h)]
+            contact = find_contact(text) if not base_contact else None
+            if not (new_hits or redirects or suspicious or (contact and contact[0] == "telegram")):
+                continue
+
+            label, only_in = snap["label"], snap["only_in"]
+            evidence, categories = [], []
+            if new_hits:
+                words = ", ".join(h.keyword.word for h in new_hits[:5])
+                evidence.append(_ev("cloaking", f"{only_in}: 광고 키워드 {words}", POINTS_CLOAKING))
+                for hit in new_hits:
+                    evidence.append(_ev("variant" if hit.variant else "keyword", evidence_label(hit), hit.weight))
+                    categories.extend([hit.keyword.category] * hit.weight)
+            if redirects:
+                evidence.append(_ev("cloaking", f"{label} 접속일 때만 다른 사이트로 이동: {get_host(redirects[0])}",
+                                    POINTS_CLOAKING))
+            bad_hosts = [get_host(u) for u in redirects if suspicious_domain(get_host(u))] + suspicious
+            if bad_hosts:
+                evidence.append(_ev("domain", f"의심 도메인: {bad_hosts[0]}", POINTS_SUSPICIOUS_DOMAIN))
+                categories.extend([suspicious_domain(bad_hosts[0])] * POINTS_SUSPICIOUS_DOMAIN)
+            if new_hosts:
+                evidence.append(_ev("external", f"{_with_ro(label)} 볼 때만 외부 링크: {', '.join(new_hosts[:3])}",
+                                    POINTS_EXTERNAL))
+            if contact:
+                points = POINTS_TELEGRAM if contact[0] == "telegram" else POINTS_CONTACT
+                evidence.append(_ev("contact", f"{_with_ro(label)} 볼 때만 연락처: {contact[1]}", points))
+            similarity = _similarity(base_text, text)
+            if similarity < CLOAKING_SIMILARITY:
+                evidence.append(_ev("cloaking", f"일반 PC 화면과 내용이 크게 다름 (같은 단어 {similarity:.0%})",
+                                    POINTS_CLOAKING_DIFF))
+
+            content = _snippet(text, new_hits[0].original if new_hits else "") or (redirects[0] if redirects else "")
+            rec = {"type": "cloaking", "selector": f"[{label}]", "content": content, "frame_path": [],
+                   "frame_url": page.get("final_url") or page["url"], "links": (redirects + new_links)[:10]}
+            finding = self._finding(rec, evidence, categories or ["기타"], page["url"])
+            if finding:
+                finding["cloaking"] = {"profile": key, "label": label, "only_in": only_in,
+                                       "similarity": round(similarity, 2),
+                                       "new_keywords": [h.keyword.word for h in new_hits],
+                                       "redirects": redirects, "new_hosts": new_hosts,
+                                       "title": snap.get("title", ""), "base_title": base.get("title", "")}
+                results.append(finding)
+        return results
+
+    def _stuffing(self, page: dict) -> dict | None:
+        texts = [f.get("text", "") for f in page.get("frames", []) if f.get("text")]
+        texts += [e.get("content", "") for e in page.get("elements", []) if e["type"] == "hidden" and e.get("content")]
+        stats = stuffing_stats("\n".join(texts))
+        if not stats:
+            return None
+        evidence = [_ev("stuffing", f"광고 키워드 {stats['kinds']}종이 {stats['count']}회 반복됨", POINTS_STUFFING)]
+        if stats["density"] >= STUFFING_DENSITY:
+            evidence.append(_ev("stuffing", f"본문 글자의 {stats['density']:.0%}가 광고 키워드", POINTS_STUFFING_DENSITY))
+        if stats["list_lines"] >= STUFFING_LIST_LINES:
+            evidence.append(_ev("stuffing", f"의미 없이 키워드만 나열한 줄 {stats['list_lines']}개", POINTS_STUFFING_LIST))
+        content = (f"키워드 도배(해킹 생성 페이지 의심): {', '.join(stats['top'])} 등 "
+                   f"{stats['kinds']}종 {stats['count']}회")
+        rec = {"type": "page_stuffing", "selector": "", "content": content, "frame_path": [], "frame_url": page["url"]}
+        finding = self._finding(rec, evidence, stats["categories"], page["url"])
+        if finding:
+            finding["stuffing"] = stats
+        return finding
+
     def score(self, rec: dict, in_hidden_frame: bool = False,
-              params: list[tuple[str, str]] | None = None) -> dict | None:
+              params: list[tuple[str, str]] | None = None, prevention_page: bool = False) -> dict | None:
         text = rec.get("content", "")
         evidence = []
         categories = []
@@ -271,7 +404,21 @@ class Detector:
         if not evidence:
             return None
 
-        if rec["type"] == "hidden" or rec.get("hidden"):
+        contact = find_contact(text)
+        if (not contact and (prevention_page or is_prevention_context(text))
+                and all(e["kind"] in ("keyword", "variant") for e in evidence)
+                and rec["type"] in ("text", "title", "link", "meta", "alt") and not rec.get("hidden")
+                and not rec.get("search_widget")):
+            return None
+
+        if rec.get("search_widget"):
+            evidence.append(_ev("search_list", f"사이트 검색어 목록({rec['search_widget']})에 올라 있음",
+                                POINTS_SEARCH_LIST))
+
+        if rec["type"] in HIDDEN_LOCATION_LABELS:
+            label = HIDDEN_LOCATION_LABELS[rec["type"]].format(field=rec.get("field", ""))
+            evidence.append(_ev("hidden", label, POINTS_HIDDEN))
+        elif rec["type"] == "hidden" or rec.get("hidden"):
             reasons = ", ".join(rec.get("hidden_reasons", [])) or "숨김 영역 안"
             evidence.append(_ev("hidden", f"숨김 처리 ({reasons})", POINTS_HIDDEN))
         elif in_hidden_frame:
@@ -281,8 +428,12 @@ class Detector:
         if untrusted or external_frame:
             evidence.append(_ev("external", "화이트리스트에 없는 외부 도메인", POINTS_EXTERNAL))
 
-        if has_contact(text):
-            evidence.append(_ev("contact", "연락처·메신저 ID 포함", POINTS_CONTACT))
+        if contact:
+            kind, matched = contact
+            if kind == "telegram":
+                evidence.append(_ev("contact", f"텔레그램 ID 포함 ({matched})", POINTS_TELEGRAM))
+            else:
+                evidence.append(_ev("contact", f"연락처·메신저 ID 포함 ({matched})", POINTS_CONTACT))
 
         reflected = reflected_params(params or [], text)
         surface = False
@@ -321,8 +472,14 @@ class Detector:
         kinds = {e["kind"] for e in evidence}
         if "reflection" in kinds:
             pattern = REFLECTION
+        elif "cloaking" in kinds:
+            pattern = CLOAKING
         elif "redirect" in kinds:
             pattern = REDIRECT
+        elif "stuffing" in kinds:
+            pattern = STUFFING
+        elif "search_list" in kinds:
+            pattern = SEARCH_LIST
         elif "hidden" in kinds:
             pattern = HIDDEN
         else:
@@ -348,6 +505,64 @@ class Detector:
             "advice": ADVICE[pattern],
             "page_url": page_url,
         }
+
+
+def _with_ro(word: str) -> str:
+    last = word[-1:] if word else ""
+    if "가" <= last <= "힣":
+        final = (ord(last) - 0xAC00) % 28
+        return word + ("로" if final in (0, 8) else "으로")
+    return word + "(으)로"
+
+
+def _snapshot_text(snap: dict) -> str:
+    return "\n".join([snap.get("title", ""), snap.get("text", "")] + snap.get("hidden", []))
+
+
+def _similarity(a: str, b: str) -> float:
+    wa, wb = set(re.findall(r"\w{2,}", a.lower())), set(re.findall(r"\w{2,}", b.lower()))
+    if not wa and not wb:
+        return 1.0
+    return len(wa & wb) / len(wa | wb)
+
+
+def _snippet(text: str, word: str, around: int = 80) -> str:
+    flat = " ".join(text.split())
+    if not word:
+        return flat[:around * 2]
+    i = flat.find(word)
+    if i < 0:
+        return flat[:around * 2]
+    start = max(0, i - around // 2)
+    return ("…" if start else "") + flat[start:i + len(word) + around].strip()
+
+
+def stuffing_stats(text: str) -> dict | None:
+    norm, _ = normalize(text or "")
+    spans = find_keyword_spans(norm)
+    if len(spans) < STUFFING_MIN_COUNT:
+        return None
+    counts = Counter(kw.word for kw, _, _ in spans)
+    if len(counts) < STUFFING_MIN_KINDS or len(spans) / len(counts) < STUFFING_MIN_REPEAT:
+        return None
+    letters = sum(1 for c in norm if c.isalnum())
+    keyword_chars = sum(sum(1 for c in norm[a:b] if c.isalnum()) for _, a, b in spans)
+    density = keyword_chars / letters if letters else 0
+    list_lines = 0
+    for line in norm.splitlines():
+        line_spans = find_keyword_spans(line)
+        line_letters = sum(1 for c in line if c.isalnum())
+        covered = sum(sum(1 for c in line[a:b] if c.isalnum()) for _, a, b in line_spans)
+        if len(line_spans) >= 3 and line_letters and covered / line_letters >= STUFFING_LINE_RATIO:
+            list_lines += 1
+    if density < STUFFING_DENSITY and list_lines < STUFFING_LIST_LINES:
+        return None
+    categories = []
+    by_word = {kw.word: kw for kw, _, _ in spans}
+    for word, n in counts.items():
+        categories.extend([by_word[word].category] * n * by_word[word].weight)
+    return {"count": len(spans), "kinds": len(counts), "density": round(density, 3), "list_lines": list_lines,
+            "top": [w for w, _ in counts.most_common(5)], "categories": categories}
 
 
 def _iframe_src(page: dict, frame_path: list[str]) -> str:
@@ -386,7 +601,21 @@ def _is_inside(child: dict, parent: dict) -> bool:
             and child["selector"].startswith(parent["selector"] + " > "))
 
 
+def _same_spot(findings: list[dict]) -> list[dict]:
+    best: dict[tuple, dict] = {}
+    for f in findings:
+        if not f["selector"]:
+            best[(id(f),)] = f
+            continue
+        key = (tuple(f["frame_path"]), f["selector"])
+        current = best.get(key)
+        if current is None or (f["score"], f["type"] == "link") > (current["score"], current["type"] == "link"):
+            best[key] = f
+    return list(best.values())
+
+
 def _drop_descendants(findings: list[dict]) -> list[dict]:
+    findings = _same_spot(findings)
     kept = []
     for f in findings:
         covered_by_parent = any(_is_inside(f, g) and g["score"] >= f["score"] for g in findings)

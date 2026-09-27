@@ -42,7 +42,7 @@ EXTRACT_JS = r"""
     let truncated = false;
     let timedOut = false;
     let scanned = 0;
-    const PRIORITY = new Set(['hidden', 'iframe', 'redirect']);
+    const PRIORITY = new Set(['hidden', 'iframe', 'redirect', 'meta', 'noscript']);
     let priorityCount = 0, normalCount = 0;
 
     const ITEM_SEL = 'article, li, [class*=post i], [class*=item i], [class*=card i], [class*=article i], ' +
@@ -63,8 +63,54 @@ EXTRACT_JS = r"""
         return '';
     }
 
+    const SEARCH_HEAD = /인기\s*검색어|최근\s*검색어|실시간\s*검색어|검색어\s*순위|추천\s*검색어|급상승\s*검색어|많이\s*찾(?:는|은)\s*검색어|인기\s*키워드|popular\s*(?:search|keyword)|trending\s*search|hot\s*keyword|top\s*searches/i;
+    const SEARCH_ATTR = /(?:popular|hot|rank|recent|best|trend)[-_]?(?:keyword|search|word|query)|(?:keyword|search|query)[-_]?(?:rank|popular|hot|recent|best|trend|list)/i;
+    const searchRoots = [];
+    function listRoot(el) {
+        let cur = el;
+        for (let depth = 0; cur && depth < 4; depth++) {
+            if (cur.querySelectorAll('li, a').length >= 2) return cur;
+            cur = cur.parentElement;
+        }
+        return null;
+    }
+    function addSearchRoot(root, label) {
+        if (root && root !== document.body && root !== document.documentElement &&
+                !searchRoots.some(([r]) => r === root || r.contains(root))) {
+            searchRoots.push([root, label]);
+        }
+    }
+    try {
+        for (const el of document.querySelectorAll('[class], [id]')) {
+            if (searchRoots.length >= 10) break;
+            const attrs = (el.getAttribute('class') || '') + ' ' + (el.id || '');
+            if (SEARCH_ATTR.test(attrs) && el.querySelectorAll('li, a').length >= 2) {
+                const head = (el.textContent || '').match(SEARCH_HEAD);
+                addSearchRoot(el, head ? head[0].replace(/\s+/g, ' ') : '검색어 목록');
+            }
+        }
+        const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT);
+        let node, seen = 0;
+        while ((node = walker.nextNode()) && seen++ < 20000 && searchRoots.length < 10) {
+            const t = node.nodeValue;
+            if (t.length > 40) continue;
+            const m = t.match(SEARCH_HEAD);
+            if (m && node.parentElement) addSearchRoot(listRoot(node.parentElement), m[0].replace(/\s+/g, ' '));
+        }
+    } catch (e) {}
+    function searchWidgetOf(el) {
+        for (const [root, label] of searchRoots) {
+            if (root.contains(el)) return label;
+        }
+        return '';
+    }
+
     function pushEl(el, rec) {
         try { rec.context_title = contextTitle(el); } catch (e) { rec.context_title = ''; }
+        if (searchRoots.length) {
+            const label = searchWidgetOf(el);
+            if (label) rec.search_widget = label;
+        }
         push(rec);
     }
 
@@ -222,6 +268,33 @@ EXTRACT_JS = r"""
         }
     }
 
+    const META_FIELDS = new Set(['description', 'keywords', 'og:title', 'og:description', 'og:site_name',
+                                 'twitter:title', 'twitter:description', 'subject', 'abstract']);
+    for (const m of document.querySelectorAll('meta[name], meta[property]')) {
+        const field = (m.getAttribute('property') || m.getAttribute('name') || '').toLowerCase();
+        const content = clip(m.getAttribute('content'));
+        if (META_FIELDS.has(field) && content.length >= 2) {
+            push({ type: 'meta', field, selector: 'meta[' + (m.hasAttribute('property') ? 'property' : 'name') +
+                   '="' + field + '"]', content });
+        }
+    }
+
+    for (const ns of document.querySelectorAll('noscript')) {
+        try {
+            const doc = new DOMParser().parseFromString(ns.textContent || '', 'text/html');
+            const content = clip(doc.body ? Array.from(doc.body.childNodes, n => n.textContent).join(' ') : '');
+            const links = [];
+            for (const a of doc.querySelectorAll('a[href]')) {
+                const u = resolveUrl(a.getAttribute('href'));
+                if (u) links.push(u);
+                if (links.length >= 20) break;
+            }
+            if (content.length >= 2 || links.length) {
+                push({ type: 'noscript', selector: cssSelector(ns), content, links });
+            }
+        } catch (e) {}
+    }
+
     const hiddenOf = new Map();
     function isHidden(el) {
         if (!el || el === body) return false;
@@ -342,6 +415,17 @@ EXTRACT_JS = r"""
             pushEl(el, { type: 'iframe', selector: cssSelector(el), src: el.src || '',
                    raw_src: el.getAttribute('src') || '', content: clip(el.title || el.name || ''),
                    hidden: fr.length > 0, hidden_reasons: fr, rect: rectOf(r) });
+        }
+
+        if (tag === 'IMG' && !el.closest('a[href]')) {
+            const alt = clip(el.getAttribute('alt') || el.getAttribute('title') || '');
+            if (alt.length >= 2 && selfHidden) {
+                pushEl(el, { type: 'hidden', tag: 'img', selector: cssSelector(el), content: alt,
+                       hidden_reasons: reasons, links: [], rect: rectOf(r) });
+            } else if (alt.length >= 2) {
+                pushEl(el, { type: 'alt', selector: cssSelector(el), content: alt, src: el.currentSrc || el.src || '',
+                       rect: rectOf(r) });
+            }
         }
 
         if (!selfHidden && text.length >= 2) {

@@ -5,6 +5,12 @@ BOT_BLOCK_NOTICE = (
     "사이트의 봇 차단 장치 때문에 일부 화면을 점검하지 못했을 수 있습니다. "
     "관리하는 사이트라면 점검 도구를 허용 목록에 추가하세요."
 )
+CLOAKING_OFF, CLOAKING_SUSPECT, CLOAKING_ALL = "off", "suspect", "all"
+CLOAKING_MODES = {
+    CLOAKING_OFF: "끄기",
+    CLOAKING_SUSPECT: "첫 페이지·의심 페이지만",
+    CLOAKING_ALL: "모든 페이지",
+}
 ROBOTS_IGNORE_WARNING = (
     "robots.txt 제한을 무시하고 수집합니다. 본인이 관리하거나 점검 권한을 받은 사이트에만 사용하세요. "
     "권한 없이 사용하면 사이트 운영 정책 위반이나 법적 문제가 될 수 있습니다."
@@ -45,4 +51,5 @@ class CrawlConfig:
     max_text_len: int = 500
     headless: bool = True
     screenshot_dir: str = ""
+    cloaking_check: str = "off"
     browser_executable: str = ""

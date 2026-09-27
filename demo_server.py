@@ -12,10 +12,35 @@ FIXTURES = Path(__file__).resolve().parent / "tests" / "fixtures"
 SITE_DIR = FIXTURES / "site"
 OLD_DIR = FIXTURES / "reflect"
 OLD_PREFIX = "/old/"
-MOUNTS = {OLD_PREFIX: OLD_DIR, "/gate/": FIXTURES / "gate"}
+CLOAK_PREFIX = "/cloak/"
+MOUNTS = {OLD_PREFIX: OLD_DIR, "/gate/": FIXTURES / "gate", "/trends/": FIXTURES / "trends",
+          CLOAK_PREFIX: FIXTURES / "cloak"}
+MOBILE_MARKERS = ("Mobile", "Android", "iPhone")
+
+
+def cloak_page(user_agent: str, referer: str) -> str:
+    if "Googlebot" in user_agent:
+        return "bot.html"
+    if "google." in referer:
+        return "google.html"
+    if any(m in user_agent for m in MOBILE_MARKERS):
+        return "mobile.html"
+    return "index.html"
 
 
 class DemoHandler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        page = self.path.split("?")[0]
+        if page in (CLOAK_PREFIX, CLOAK_PREFIX + "index.html"):
+            self.path = CLOAK_PREFIX + cloak_page(self.headers.get("User-Agent", ""), self.headers.get("Referer", ""))
+        super().do_GET()
+
+    def end_headers(self):
+        if self.path.startswith(CLOAK_PREFIX):
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Vary", "User-Agent, Referer")
+        super().end_headers()
+
     def translate_path(self, path):
         for prefix, directory in MOUNTS.items():
             if path.startswith(prefix):
@@ -68,7 +93,13 @@ def main():
     print("    - URL 파라미터 반사 2건·노출 광고 1건(불법광고 의심), 악용 가능 지점 1건(검토 필요)이 발견됩니다.")
     print(f" ③ 입장 버튼 사이트 시연: 시작 주소에 {base}gate/index.html 입력 → 점검 시작")
     print("    - '입장하기' 버튼만 누르고 로그인·가입·삭제·신고 버튼은 누르지 않습니다. 게시판의 숨김 광고 1건이 발견됩니다.")
-    print(f" ④ 브라우저로 직접 보기: {base}index.html , {base}old/home.html?play=바카라분석")
+    print(f" ④ 최신 수법 시연: 시작 주소에 {base}trends/index.html 입력 → 점검 시작")
+    print("    - 검색어 목록 오염(인기·최근 검색어의 마약·환전 텔레그램 ID), 키워드 도배 페이지,")
+    print("      meta description·og·이미지 alt·noscript에 숨긴 광고, 마약·대포통장·불법환전·작업대출 댓글이 발견됩니다.")
+    print("    - '도박 중독 예방 안내' 페이지는 도박·마약 용어가 많아도 광고로 잡히지 않습니다.")
+    print(f" ⑤ 클로킹 시연: 고급 설정 '클로킹 검사'를 켜고 시작 주소에 {base}cloak/index.html 입력 → 점검 시작")
+    print("    - 주소창에 직접 열면 정상 화면이지만, 구글봇·구글 검색 경유·모바일로 볼 때만 광고·외부 이동이 나타납니다.")
+    print(f" ⑥ 브라우저로 직접 보기: {base}index.html , {base}old/home.html?play=바카라분석")
     print("-" * 70)
     print(" 종료하려면 이 창에서 Ctrl+C 를 누르세요.")
     try:

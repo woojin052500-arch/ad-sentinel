@@ -12,9 +12,9 @@ from playwright.sync_api import Error as PlaywrightError, Frame, Page, sync_play
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from ad_sentinel import __version__
-from ad_sentinel.config import BOT_BLOCK_NOTICE, ROBOTS_IGNORE_WARNING, CrawlConfig
+from ad_sentinel.config import BOT_BLOCK_NOTICE, CLOAKING_ALL, CLOAKING_OFF, ROBOTS_IGNORE_WARNING, CrawlConfig
 from ad_sentinel.crawler.browser import launch_browser
-from ad_sentinel.crawler import sitemap
+from ad_sentinel.crawler import cloaking, sitemap
 from ad_sentinel.crawler.extract_js import EXTRACT_JS, FRAME_ELEMENT_JS
 from ad_sentinel.crawler.gate import (BOT_BLOCK_HINT, DANGER_WORDS, EXIT_PATTERN, FIND_GATE_JS, FIND_MORE_JS, FOOTER_SELECTOR, GATE_PARTS,
                                       GATE_WORDS, JS_CLICK, MAX_GATE_CANDIDATES, PAGE_METRICS_JS, SCREEN_TEXT_JS,
@@ -165,6 +165,9 @@ class Crawler:
                         notice.warning("시작 주소가 오류 페이지입니다(%s). 입장 버튼은 누르지 않았습니다. 주소를 확인하세요: %s",
                                        page_result["error_page"], url)
                     self._track_screen(page_result)
+                    cloaking_reason = self._cloaking_reason(page_result, first=len(result["pages"]) == 1)
+                    if cloaking_reason:
+                        self._check_cloaking(browser, page_result, cloaking_reason)
                     if self.on_page:
                         self.on_page(len(result["pages"]), page_result)
 
@@ -386,6 +389,47 @@ class Crawler:
             self._extract_frame(frame, page_result, i, len(frames), remaining_ms())
         main = next((f for f in page_result["frames"] if f["is_main"]), None)
         page_result["title"] = main["title"] if main else ""
+
+    def _cloaking_reason(self, page_result: dict, first: bool) -> str:
+        mode = self.config.cloaking_check
+        if mode == CLOAKING_OFF or page_result.get("error") or self.stop_event.is_set():
+            return ""
+        suspicion = self._suspicion(page_result)
+        if suspicion:
+            return suspicion
+        if first:
+            return "첫 페이지"
+        return "모든 페이지 검사" if mode == CLOAKING_ALL else ""
+
+    @staticmethod
+    def _suspicion(page_result: dict) -> str:
+        from ad_sentinel.detector.keywords import find_contact, find_keywords
+
+        if page_result.get("offsite_redirect"):
+            return "다른 사이트로 이동"
+        texts = [page_result.get("title") or ""]
+        for e in page_result["elements"]:
+            if e["type"] in ("hidden", "noscript", "redirect") and (e.get("links") or e["type"] == "redirect"):
+                return "숨김 링크·자동 이동"
+            if e.get("content"):
+                texts.append(e["content"])
+        joined = "\n".join(texts)
+        words = find_keywords(joined)
+        if any(k.weight >= 2 for k in words) or (words and find_contact(joined)):
+            return "광고 키워드"
+        return ""
+
+    def _check_cloaking(self, browser, page_result: dict, reason: str) -> None:
+        url = page_result["final_url"] or page_result["url"]
+        log.info("  클로킹 검사(%s): 일반 PC·구글봇·구글 검색 경유·모바일로 각각 열어 비교", reason)
+        started = time.monotonic()
+        data = cloaking.check(browser, url, USER_AGENT, self.config.page_timeout_ms, self._evaluate,
+                              stop=self.stop_event.is_set)
+        data["reason"] = reason
+        page_result["cloaking"] = data
+        failed = [p["label"] for p in data["profiles"] if p["error"]]
+        log.info("  클로킹 검사 완료 %.1fs%s", time.monotonic() - started,
+                 f" (열지 못함: {', '.join(failed)})" if failed else "")
 
     def _content_links(self, page_result: dict) -> set[str]:
         records = [r for r in page_result["elements"] if r["type"] == "link" and not is_boilerplate_link(r)]

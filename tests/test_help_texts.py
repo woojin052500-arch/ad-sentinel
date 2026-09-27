@@ -1,7 +1,7 @@
 from ad_sentinel.help_texts import COLUMNS, QUICK_START, SETTINGS, UNCHECKED, as_markdown, estimate_text, tooltip_text
 
 SETTING_KEYS = {"max_pages", "max_depth", "enter_gate", "sitemap", "own_site", "delay", "page_timeout", "show_browser",
-                "detail_log"}
+                "cloaking", "detail_log"}
 
 
 def test_every_setting_has_three_line_help():

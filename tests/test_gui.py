@@ -216,3 +216,31 @@ def test_resize_is_debounced(app, monkeypatch):
 def test_icons_are_loaded(app):
     assert app.icon_problems == []
     assert len(app._icon_images) == 6 and app._icon_images[0].width() == 256
+
+
+def test_cloaking_option_and_detail(app):
+    from ad_sentinel.config import CLOAKING_MODES
+
+    app.start_url.set("https://www.example.go.kr/")
+    assert app._make_config().cloaking_check == "off"
+    app.cloaking_label.set(CLOAKING_MODES["suspect"])
+    assert app._make_config().cloaking_check == "suspect"
+    app.cloaking_label.set(CLOAKING_MODES["off"])
+
+    def snap(key, label, only_in, text, links=()):
+        return {"key": key, "label": label, "only_in": only_in, "title": "복지 안내", "text": text,
+                "links": list(links), "redirects": [], "hidden": [], "error": None}
+
+    profiles = [snap("pc", "일반 PC", "", "기초연금 신청 안내"),
+                snap("googlebot", "구글봇", "구글봇으로 볼 때만 나타남", "바카라 사이트 추천 카지노 첫충",
+                     ["https://win777-casino.invalid/"])]
+    page = {"url": START, "final_url": START, "elements": [], "frames": [], "cloaking": {"profiles": profiles}}
+    crawl = {"meta": {"start_url": START, "config": {"include_subdomains": True}}, "pages": [page]}
+    report = detect(crawl)
+    app._show_report(crawl, report)
+    first = app.table.get_children()[0]
+    assert app.table.item(first)["values"][1] == "클로킹 의심"
+    app.table.selection_set(first)
+    app._on_select()
+    text = app.detail.get("1.0", "end")
+    assert "클로킹 비교 (구글봇)" in text and "구글봇으로 볼 때만 나타남" in text and "win777-casino.invalid" in text

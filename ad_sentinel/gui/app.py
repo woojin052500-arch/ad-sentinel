@@ -9,7 +9,7 @@ from pathlib import Path
 from tkinter import filedialog, font, messagebox, ttk
 
 from ad_sentinel import __version__
-from ad_sentinel.config import OWN_SITE_LABEL, ROBOTS_IGNORE_WARNING, CrawlConfig
+from ad_sentinel.config import CLOAKING_MODES, CLOAKING_OFF, OWN_SITE_LABEL, ROBOTS_IGNORE_WARNING, CrawlConfig
 from ad_sentinel.crawler import Crawler
 from ad_sentinel.detector import detect
 from ad_sentinel.detector.domains import DEFAULT_WHITELIST, read_user_whitelist, save_user_whitelist
@@ -80,6 +80,7 @@ class App(tk.Tk):
         self.page_timeout = tk.IntVar(value=int(CrawlConfig.page_total_timeout_sec))
         self.show_advanced = tk.BooleanVar(value=False)
         self.show_browser = tk.BooleanVar(value=False)
+        self.cloaking_label = tk.StringVar(value=CLOAKING_MODES[CLOAKING_OFF])
         self.run_started = 0.0
         self.show_detail_log = tk.BooleanVar(value=False)
         self.list_info = tk.StringVar(value="불러온 목록 없음")
@@ -227,19 +228,30 @@ class App(tk.Tk):
         ttk.Checkbutton(bottom_row, text="고급 설정", variable=self.show_advanced,
                         command=self._toggle_advanced).pack(side="left", padx=(pad * 4, pad))
         self.advanced_frame = ttk.Frame(bottom)
-        ttk.Label(self.advanced_frame, text="요청 간격").pack(side="left")
-        self._help(self.advanced_frame, "delay").pack(side="left", padx=(pad // 2, 0))
-        ttk.Spinbox(self.advanced_frame, from_=0, to=30, increment=0.5, textvariable=self.delay_sec,
+        adv = ttk.Frame(self.advanced_frame)
+        adv.pack(fill="x")
+        ttk.Label(adv, text="요청 간격").pack(side="left")
+        self._help(adv, "delay").pack(side="left", padx=(pad // 2, 0))
+        ttk.Spinbox(adv, from_=0, to=30, increment=0.5, textvariable=self.delay_sec,
                     width=5).pack(side="left", padx=pad)
-        ttk.Label(self.advanced_frame, text="초 (차단되면 자동으로 늘림)").pack(side="left")
-        ttk.Label(self.advanced_frame, text="페이지당 제한 시간").pack(side="left", padx=(pad * 4, 0))
-        self._help(self.advanced_frame, "page_timeout").pack(side="left", padx=(pad // 2, 0))
-        ttk.Spinbox(self.advanced_frame, from_=10, to=600, increment=10, textvariable=self.page_timeout,
+        ttk.Label(adv, text="초 (차단되면 자동으로 늘림)").pack(side="left")
+        ttk.Label(adv, text="페이지당 제한 시간").pack(side="left", padx=(pad * 4, 0))
+        self._help(adv, "page_timeout").pack(side="left", padx=(pad // 2, 0))
+        ttk.Spinbox(adv, from_=10, to=600, increment=10, textvariable=self.page_timeout,
                     width=5).pack(side="left", padx=pad)
-        ttk.Label(self.advanced_frame, text="초").pack(side="left")
-        ttk.Checkbutton(self.advanced_frame, text="브라우저 창 보이기(진단용)",
+        ttk.Label(adv, text="초").pack(side="left")
+        ttk.Checkbutton(adv, text="브라우저 창 보이기(진단용)",
                         variable=self.show_browser).pack(side="left", padx=(pad * 4, 0))
-        self._help(self.advanced_frame, "show_browser").pack(side="left", padx=(pad // 2, 0))
+        self._help(adv, "show_browser").pack(side="left", padx=(pad // 2, 0))
+        adv2 = ttk.Frame(self.advanced_frame)
+        adv2.pack(fill="x", pady=(pad, 0))
+        ttk.Label(adv2, text="클로킹 검사").pack(side="left")
+        self._help(adv2, "cloaking").pack(side="left", padx=(pad // 2, 0))
+        self.cloaking_box = ttk.Combobox(adv2, state="readonly", width=22, textvariable=self.cloaking_label,
+                                         values=list(CLOAKING_MODES.values()))
+        self.cloaking_box.pack(side="left", padx=pad)
+        ttk.Label(adv2, foreground=HINT_COLOR,
+                  text="(구글봇·구글 검색 경유·모바일로도 열어 비교, 켜면 검사한 페이지마다 몇 초 더 걸림)").pack(side="left")
 
         buttons = ttk.Frame(root)
         buttons.pack(fill="x", pady=pad)
@@ -444,6 +456,8 @@ class App(tk.Tk):
         common = dict(respect_robots=not self.own_site.get(), delay_sec=max(0.0, delay),
                       page_total_timeout_sec=max(10.0, timeout), enter_gate=self.enter_gate.get(),
                       headless=not self.show_browser.get(),
+                      cloaking_check=next((k for k, v in CLOAKING_MODES.items() if v == self.cloaking_label.get()),
+                                          CLOAKING_OFF),
                       screenshot_dir=str(output_dir() / "screenshots") if self.show_detail_log.get() else "")
         if self.mode.get() == LIST:
             if not self.url_list:
@@ -693,6 +707,27 @@ class App(tk.Tk):
             parts += [("label", "iframe 경로 (바깥 → 안쪽)\n"), ("", "\n".join(f["frame_path"]) + "\n")]
         if f.get("hidden_reasons"):
             parts += [("label", "숨김 이유\n"), ("", ", ".join(f["hidden_reasons"]) + "\n")]
+        if f.get("cloaking"):
+            c = f["cloaking"]
+            lines = [c["only_in"] + " (주소창에 직접 입력한 일반 PC 화면에는 없음)",
+                     f"일반 PC 화면과 같은 단어 비율: {c['similarity']:.0%}"]
+            if c["new_keywords"]:
+                lines.append("새로 나타난 광고 키워드: " + ", ".join(c["new_keywords"]))
+            if c["redirects"]:
+                lines.append("이동하는 주소: " + ", ".join(c["redirects"][:3]))
+            if c["new_hosts"]:
+                lines.append("새로 나타난 외부 링크: " + ", ".join(c["new_hosts"][:5]))
+            if c.get("title") and c["title"] != c.get("base_title"):
+                lines.append(f"페이지 제목: '{c['base_title']}' → '{c['title']}'")
+            parts += [("label", f"클로킹 비교 ({c['label']})\n"), ("warn", "\n".join(lines) + "\n")]
+        if f.get("stuffing"):
+            st = f["stuffing"]
+            lines = [f"광고 키워드 {st['kinds']}종 {st['count']}회, 본문 글자의 {st['density']:.0%}",
+                     f"키워드만 나열한 줄 {st['list_lines']}개"]
+            if st.get("merged"):
+                lines.append(f"이 페이지의 키워드 문구 {st['merged']}건을 이 항목으로 묶었습니다. 예: " +
+                             " / ".join(st.get("examples", [])[:3]))
+            parts += [("label", "키워드 도배 분석\n"), ("", "\n".join(lines) + "\n")]
         if f.get("urls"):
             parts += [("label", "연결된 주소\n"), ("", "\n".join(f["urls"]) + "\n")]
         parts += [("label", "판정 근거\n"),

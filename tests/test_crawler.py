@@ -96,7 +96,7 @@ def test_detector_on_sample_site(result):
     assert by_content["스포츠 베팅 바로가기"]["urls"] == ["http://bet.invalid/"]
     assert "바로가기" not in by_content
     enclosed = by_content["ⓒⓐⓢⓘⓝⓞ 신규 가입 이벤트 바로가기"]
-    assert any("변형 표기: ⓒⓐⓢⓘⓝⓞ → casino, 감싼 문자" in e["label"] for e in enclosed["evidence"])
+    assert any("변형 표기: ⓒⓐⓢⓘⓝⓞ → casino (감싼 문자)" in e["label"] for e in enclosed["evidence"])
     assert all("정상적인" not in f["content"] for f in report["findings"])
 
 

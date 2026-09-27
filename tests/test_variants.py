@@ -23,7 +23,7 @@ def _hit(text):
     ("qkzkfk사이트", "바카라", "keyboard", "qkzkfk"),
     ("ㅂㅋㄹ 가입", "바카라", "chosung", "ㅂㅋㄹ"),
     ("카​지노", "카지노", "normalize", "카​지노"),
-    ("casinо 777", "casino", "normalize", "casinо"),
+    ("casinо 777", "casino", "confusable", "casinо"),
     ("ｃａｓｉｎｏ", "casino", "normalize", "ｃａｓｉｎｏ"),
     ("카2노 가입", "카지노", "digits", "카2노"),
     ("토.토", "토토", "symbols", "토.토"),
@@ -94,7 +94,7 @@ def test_evidence_shows_original_and_reading():
     f = Detector(_crawl()).score(_rec("hidden", "밖!콰라!!", hidden_reasons=["display:none"],
                                       links=["http://ads.invalid/"]))
     label = next(e["label"] for e in f["evidence"] if e["kind"] == "variant")
-    assert "변형 표기: 밖!콰라 → 바카라" in label and "발음 변형" in label
+    assert "변형 표기: 밖!콰라 → 바카라 (발음 변형)" in label and "발음 변형" in label
 
 
 @pytest.mark.parametrize("text", ["밖!콰라!!", "qkzkfk", "ㅂㅋㄹ", "카징노"])
@@ -191,7 +191,7 @@ def test_accent_evidence_label_and_score():
     g = detector.score(_rec("link", "casino 바로가기", href="http://win777.invalid/"))
     assert (f["score"], f["level"]) == (g["score"], g["level"])
     label = next(e["label"] for e in f["evidence"] if e["kind"] == "variant")
-    assert "변형 표기: çâśîñö → casino, 악센트 문자" in label
+    assert "변형 표기: çâśîñö → casino (악센트 문자)" in label
 
 
 @pytest.mark.parametrize("text", [

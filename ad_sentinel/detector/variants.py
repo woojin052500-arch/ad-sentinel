@@ -1,6 +1,7 @@
 import re
 import unicodedata
 from dataclasses import dataclass
+from pathlib import Path
 
 from ad_sentinel.detector.keywords import KEYWORDS, MEDIUM, Keyword, find_keyword_spans
 
@@ -16,11 +17,40 @@ HOMOGLYPHS = str.maketrans({
     "Α": "A", "Β": "B", "Ε": "E", "Ζ": "Z", "Η": "H", "Ι": "I", "Κ": "K", "Μ": "M", "Ν": "N", "Ο": "O",
     "Ρ": "P", "Τ": "T", "Υ": "Y", "Χ": "X",
 })
+HOMOGLYPH_CHARS = {chr(k) for k in HOMOGLYPHS}
 
 CHOSUNG = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ"
 CONJOINING_CHOSUNG = str.maketrans({chr(0x1100 + i): c for i, c in enumerate(CHOSUNG)})
 
-ENCLOSED, STYLED, ACCENT = "enclosed", "styled", "accent"
+ENCLOSED, STYLED, ACCENT, CONFUSABLE = "enclosed", "styled", "accent", "confusable"
+CONFUSABLES_FILE = Path(__file__).resolve().parent / "data" / "confusables.txt"
+EXCLUDED_SCRIPTS = (("\u1100", "\u11ff"), ("\u2e80", "\u9fff"), ("\ua960", "\ua97f"), ("\uac00", "\ud7ff"),
+                    ("\uf900", "\ufaff"), ("\uff65", "\uffdc"), ("\U00020000", "\U0003ffff"))
+
+
+def _excluded_source(ch: str) -> bool:
+    return (ch.isascii() or not (unicodedata.category(ch).startswith("L") or unicodedata.category(ch) == "Nl")
+            or any(lo <= ch <= hi for lo, hi in EXCLUDED_SCRIPTS))
+
+
+def load_confusables(path: Path = CONFUSABLES_FILE) -> dict[str, str]:
+    table = {}
+    try:
+        lines = path.read_text(encoding="utf-8-sig").splitlines()
+    except OSError:
+        return table
+    for line in lines:
+        fields = [f.strip() for f in line.split("#", 1)[0].split(";")]
+        if len(fields) < 2 or not fields[0]:
+            continue
+        source = "".join(chr(int(c, 16)) for c in fields[0].split())
+        target = "".join(chr(int(c, 16)) for c in fields[1].split())
+        if len(source) == 1 and target.isascii() and target.isalpha() and not _excluded_source(source):
+            table[source] = target
+    return table
+
+
+CONFUSABLES = load_confusables()
 ENCLOSED_TAGS = {"<circle>", "<square>"}
 STYLED_TAGS = {"<font>", "<super>", "<sub>"}
 ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -68,6 +98,9 @@ def letter_style(ch: str) -> str:
         return ENCLOSED
     if tag in STYLED_TAGS:
         return STYLED
+    base = _strip_accents(unicodedata.normalize("NFKC", ch))
+    if not base.isascii() and (base in HOMOGLYPH_CHARS or base in CONFUSABLES):
+        return CONFUSABLE
     if ch in ACCENT_LETTERS or unicodedata.category(ch) == "Mn" or (
             tag and not tag.startswith("<") and any(unicodedata.category(chr(int(c, 16))) == "Mn" for c in tag.split()
                                                     + rest.split())):
@@ -93,7 +126,7 @@ def _plain(ch: str) -> str:
     plain = unicodedata.normalize("NFKC", ch)
     if len(plain) > 2 and plain[0] == "(" and plain[-1] == ")" and letter_style(ch) == ENCLOSED:
         plain = plain[1:-1]
-    return _strip_accents(plain.translate(CONJOINING_CHOSUNG))
+    return "".join(CONFUSABLES.get(c, c) for c in _strip_accents(plain.translate(CONJOINING_CHOSUNG)))
 JUNGSUNG = "ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ"
 JONGSUNG = ["", "ㄱ", "ㄲ", "ㄳ", "ㄴ", "ㄵ", "ㄶ", "ㄷ", "ㄹ", "ㄺ", "ㄻ", "ㄼ", "ㄽ", "ㄾ", "ㄿ", "ㅀ", "ㅁ",
             "ㅂ", "ㅄ", "ㅅ", "ㅆ", "ㅇ", "ㅈ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ"]
@@ -125,7 +158,8 @@ FINAL_PAIRS = {("ㄱ", "ㅅ"): "ㄳ", ("ㄴ", "ㅈ"): "ㄵ", ("ㄴ", "ㅎ"): "�
                ("ㅂ", "ㅅ"): "ㅄ"}
 
 VARIANT_LABELS = {
-    "normalize": "보이지 않는 문자·전각·닮은꼴 문자",
+    "normalize": "보이지 않는 문자·전각 등 호환 문자",
+    CONFUSABLE: "닮은꼴 문자, UTS #39",
     ENCLOSED: "감싼 문자",
     ACCENT: "악센트 문자",
     STYLED: "특수 글꼴·첨자 문자",
@@ -136,7 +170,7 @@ VARIANT_LABELS = {
     "chosung": "초성 표기",
     "keyboard": "한영 자판 변환",
 }
-FULL_WEIGHT_METHODS = {"normalize", "symbols", ENCLOSED, STYLED, ACCENT}
+FULL_WEIGHT_METHODS = {"normalize", "symbols", ENCLOSED, STYLED, ACCENT, CONFUSABLE}
 
 
 @dataclass
@@ -258,6 +292,8 @@ def analyze(text: str) -> list[Hit]:
     hits: dict[str, Hit] = {}
 
     def add(kw: Keyword, method: str, original: str, reading: str = ""):
+        if method != "exact" and original.strip() == kw.word:
+            return
         if method == "normalize":
             method = _style_method(original) or method
         weight = kw.weight if method in ("exact", *FULL_WEIGHT_METHODS) else _lower_weight(kw)
@@ -321,9 +357,10 @@ def _style_method(original: str) -> str:
     styles = {letter_style(ch) for ch in original}
     if ENCLOSED in styles:
         return ENCLOSED
-    if STYLED in styles:
-        return STYLED
-    return ACCENT if ACCENT in styles else ""
+    for style in (STYLED, CONFUSABLE, ACCENT):
+        if style in styles:
+            return style
+    return ""
 
 
 def evidence_label(hit: Hit) -> str:
@@ -331,4 +368,4 @@ def evidence_label(hit: Hit) -> str:
     if not hit.variant:
         return base
     reading = hit.reading if hit.method == "keyboard" else hit.keyword.word
-    return f"{base} (변형 표기: {hit.original} → {reading}, {VARIANT_LABELS[hit.method]})"
+    return f"{base} · 변형 표기: {hit.original} → {reading} ({VARIANT_LABELS[hit.method]})"
