@@ -3,7 +3,7 @@ AD Sentinel - 제3자 구성요소 고지 (Third-Party Notices)
 
 1. Unicode confusables.txt (UTS #39 Unicode Security Mechanisms)
    - 파일: ad_sentinel/detector/data/confusables.txt
-   - 버전: Unicode 13.0.0 (2020-02-13), 원본 파일을 수정 없이 포함
+   - 버전: Unicode 18.0.0 (2026-08-06), 원본 파일을 수정 없이 포함
    - 출처: https://www.unicode.org/Public/security/ (UTS #39: https://www.unicode.org/reports/tr39/)
    - 용도: 닮은꼴 문자(confusable)를 기본 라틴 문자로 바꿔 불법광고 키워드의 우회 표기를 찾는 데 사용
    - 라이선스: Unicode License V3 (SPDX: Unicode-3.0), 전문은 아래와 같습니다.

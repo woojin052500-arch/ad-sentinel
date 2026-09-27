@@ -378,12 +378,11 @@ sitemap.xml·약관 같은 고정 링크로만 점검이 끝나면 `sitemap.xml�
     ø·đ·ł 등은 직접 변환표) → ③ confusable skeleton(UTS #39 표로 기본 문자로 변환) → ④ 직접 만든 닮은꼴 표(보완용)
   - **비라틴·특수 문자 → 라틴 방향으로만** 씁니다. 원래 글자가 영문·숫자(ASCII)이거나, 글자(L*)·로마 숫자(Nl)가 아니거나(기호·숫자·
     문장부호), 한글·한자·가나 영역이면 쓰지 않고, 바뀐 결과도 영문자일 때만 씁니다. 그래서 `0↔O`, `1↔l`, `rn↔m`, `|↔l` 같은 쌍이나
-    한글 `ㅣ`·`ㅇ`·`ㅡ`는 바뀌지 않아 정상 문장이 걸리지 않습니다. 사용하는 변환은 1,266개입니다.
+    한글 `ㅣ`·`ㅇ`·`ㅡ`는 바뀌지 않아 정상 문장이 걸리지 않습니다. 사용하는 변환은 1,372개입니다.
   - 근거 표시: `성인 키워드 'porn' · 변형 표기: рогn → porn (닮은꼴 문자, UTS #39)`, 점수는 낮추지 않습니다.
   - 전각 문자처럼 NFKC에서 이미 풀리는 글자는 `보이지 않는 문자·전각 등 호환 문자`로 따로 표시합니다.
-  - 포함한 파일: Unicode 13.0.0 `confusables.txt` (2020-02-13, 원본 머리말·저작권 표시 그대로). 개발 환경에서 unicode.org에 직접
-    접속할 수 없어 PyPI `confusables` 패키지(1.2.0)에 들어 있는 원본 파일을 그대로 가져왔습니다. 최신판으로 바꾸려면
-    https://www.unicode.org/Public/security/latest/confusables.txt 를 같은 이름으로 덮어쓰면 됩니다. (코드 수정 불필요)
+  - 포함한 파일: Unicode 18.0.0 `confusables.txt` (2026-08-06, 원본 머리말·저작권 표시 그대로, 수정 없음).
+    출처: https://www.unicode.org/Public/security/latest/confusables.txt . 새 판이 나오면 같은 이름으로 덮어쓰면 됩니다. (코드 수정 불필요)
   - 라이선스: Unicode License V3 (SPDX `Unicode-3.0`), 전문은 `ad_sentinel/detector/data/LICENSE-UNICODE.txt`와
     배포 폴더용 `THIRD_PARTY_NOTICES.txt`에 있습니다.
 - **화이트리스트(신뢰 도메인)**: 기본값은 정부 도메인(`*.go.kr`, `gov.kr`, `mil.kr`, `korea.kr`, `korea.net`)과 공식 SNS뿐입니다.
