@@ -241,7 +241,7 @@ def test_cloaking_option_and_detail(app):
     report = detect(crawl)
     app._show_report(crawl, report)
     first = app.table.get_children()[0]
-    assert app.table.item(first)["values"][1] == "클로킹 의심(구글봇)"
+    assert app.table.item(first)["values"][1] == "클로킹(구글봇)"
     app.table.selection_set(first)
     app._on_select()
     text = app.detail.get("1.0", "end")
@@ -294,3 +294,18 @@ def ttk_style(app):
     from tkinter import ttk
 
     return ttk.Style(app)
+
+
+def test_pattern_column_fits_longest_label(app):
+    cell_font = gui_font(app)
+    width = app.table.column("pattern", "width")
+    for label in ("클로킹(구글 경유)", "URL 파라미터 반사", "검색어 목록 오염"):
+        assert cell_font.measure(label) + 16 <= width
+
+
+def gui_font(app):
+    from tkinter import font as tkfont
+
+    from ad_sentinel.gui.app import _font_of
+
+    return _font_of("Treeview") or tkfont.nametofont("TkDefaultFont")

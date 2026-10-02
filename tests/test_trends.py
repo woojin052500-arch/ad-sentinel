@@ -138,7 +138,7 @@ def test_cloaking_is_found_for_each_disguise(cloak_run):
     found = {f["cloaking"]["profile"]: f for f in report["findings"] if f["pattern"] == CLOAKING}
     assert set(found) == {"googlebot", "google_referer", "mobile"}
     assert {k: f["pattern_label"] for k, f in found.items()} == {
-        "googlebot": "클로킹 의심(구글봇)", "google_referer": "클로킹 의심(구글 검색 경유)", "mobile": "클로킹 의심(모바일)"}
+        "googlebot": "클로킹(구글봇)", "google_referer": "클로킹(구글 경유)", "mobile": "클로킹(모바일)"}
     assert all(f["level"] == "high" for f in found.values())
     assert found["googlebot"]["content"] == "바카라 사이트 추천 - 온라인 카지노 가입코드"
     assert found["mobile"]["content"] == "모바일 슬롯사이트 가입 시 꽁머니 3만원 지급"
@@ -269,3 +269,32 @@ def test_confusable_letters_use_uts39(text, word):
 def test_confusables_do_not_create_false_positives(text):
     assert analyze(text) == []
     assert normalize("0O 1l I|")[0] == "0O 1l I|"
+
+
+def test_each_url_is_requested_once_and_small_site_has_no_notice():
+    from collections import Counter
+
+    server = DemoServer()
+    crawl = server.crawl("index.html")
+    counts = Counter(path for path, _, _ in server.requests)
+    assert counts["/robots.txt"] == 1
+    assert [p for p, n in counts.items() if n > 1] == []
+    assert crawl["meta"]["notes"] == []
+
+
+@pytest.mark.parametrize("path", ["cloak/index.html", "old/home.html?play=%EB%B0%94%EC%B9%B4%EB%9D%BC"])
+def test_single_page_sites_without_gate_have_no_notice(path):
+    crawl = DemoServer().crawl(path)
+    assert len(crawl["pages"]) == 1
+    assert crawl["meta"]["notes"] == []
+
+
+def test_gate_with_new_links_has_no_feed_warning(caplog):
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="ad_sentinel"):
+        crawl = DemoServer().crawl("gate/index.html")
+    gate = crawl["pages"][0]["gate"]
+    assert gate["new_links"] > 0
+    assert "피드 게시글을 수집하지 못했을 수 있습니다" not in caplog.text
+    assert "게시판 페이지를 따로 점검합니다" in caplog.text

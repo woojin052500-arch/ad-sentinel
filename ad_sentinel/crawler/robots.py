@@ -26,6 +26,16 @@ class RobotsChecker:
         parser.parse(body.splitlines())
         return parser
 
+    def preload(self, origin: str, robots_txt: str) -> None:
+        if origin in self._cache:
+            return
+        if not robots_txt.strip():
+            self._cache[origin] = None
+            return
+        parser = RobotFileParser()
+        parser.parse(robots_txt.splitlines())
+        self._cache[origin] = parser
+
     def allowed(self, url: str) -> bool:
         parts = urlsplit(url)
         origin = f"{parts.scheme}://{parts.netloc}"

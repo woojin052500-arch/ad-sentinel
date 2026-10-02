@@ -25,6 +25,7 @@ POINTS_TELEGRAM = 2
 POINTS_CLOAKING = 3
 POINTS_CLOAKING_DIFF = 1
 CLOAKING_SIMILARITY = 0.5
+CLOAKING_SHORT = {"googlebot": "구글봇", "google_referer": "구글 경유", "mobile": "모바일"}
 POINTS_SEARCH_LIST = 2
 POINTS_STUFFING = 3
 POINTS_STUFFING_DENSITY = 2
@@ -355,7 +356,7 @@ class Detector:
                    "frame_url": page.get("final_url") or page["url"], "links": (redirects + new_links)[:10]}
             finding = self._finding(rec, evidence, categories or ["기타"], page["url"])
             if finding:
-                finding["pattern_label"] = f"{PATTERN_LABELS[CLOAKING]}({label})"
+                finding["pattern_label"] = f"클로킹({CLOAKING_SHORT.get(key, label)})"
                 finding["cloaking"] = {"profile": key, "label": label, "only_in": only_in,
                                        "similarity": round(similarity, 2),
                                        "new_keywords": [h.keyword.word for h in new_hits],

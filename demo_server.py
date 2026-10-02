@@ -50,7 +50,10 @@ class DemoHandler(http.server.SimpleHTTPRequestHandler):
         return super().translate_path(path)
 
     def log_message(self, fmt, *args):
-        print("  요청:", self.path)
+        pass
+
+    def log_request(self, code="-", size="-"):
+        print(f"  요청: {self.path} ({getattr(code, 'value', code)})")
 
 
 def write_url_list(base: str) -> Path:

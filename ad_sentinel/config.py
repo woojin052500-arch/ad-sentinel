@@ -52,4 +52,5 @@ class CrawlConfig:
     headless: bool = True
     screenshot_dir: str = ""
     cloaking_check: str = "off"
+    block_heavy_resources: bool = True
     browser_executable: str = ""

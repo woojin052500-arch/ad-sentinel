@@ -320,14 +320,15 @@ class App(tk.Tk):
 
     def _build_table(self, parent) -> ttk.Frame:
         frame = ttk.Frame(parent)
-        columns = [("level", "판정", "불법광고 의심"), ("pattern", "유형", "URL 파라미터 반사"),
+        columns = [("level", "판정", "불법광고 의심"), ("pattern", "유형", "URL 파라미터 반사|클로킹(구글 경유)|검색어 목록 오염"),
                    ("category", "분류", "불법의약품"), ("score", "점수", "10"),
                    ("content", "내용", ""), ("pages", "페이지 수", "100개")]
         self.table = ttk.Treeview(frame, columns=[c for c, _, _ in columns], show="headings", selectmode="browse")
         heading_font = _font_of("Treeview.Heading") or font.nametofont("TkHeadingFont")
         cell_font = _font_of("Treeview") or font.nametofont("TkDefaultFont")
         for key, title, sample in columns:
-            width = max(heading_font.measure(f"{title} ?"), cell_font.measure(sample)) + self.px(28)
+            width = max([heading_font.measure(f"{title} ?")] + [cell_font.measure(t) for t in sample.split("|")])
+            width += self.px(28)
             if key == "content":
                 width = self.px(180)
             self.table.heading(key, text=f"{title} ?")

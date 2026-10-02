@@ -67,12 +67,14 @@ def _context_options(profile: dict, default_ua: str) -> dict:
 
 
 def snapshot(browser: Browser, url: str, profile: dict, default_ua: str, timeout_ms: int,
-             evaluate: Callable) -> dict:
+             evaluate: Callable, prepare: Callable | None = None) -> dict:
     result = {"key": profile["key"], "label": profile["label"], "only_in": profile["only_in"], "status": None,
               "final_url": "", "title": "", "text": "", "links": [], "redirects": [], "hidden": [], "error": None}
     context = None
     try:
         context = browser.new_context(**_context_options(profile, default_ua))
+        if prepare:
+            prepare(context)
         page = context.new_page()
         response = page.goto(url, referer=profile["referer"], wait_until="domcontentloaded", timeout=timeout_ms)
         result["status"] = response.status if response else None
@@ -102,10 +104,10 @@ def snapshot(browser: Browser, url: str, profile: dict, default_ua: str, timeout
 
 
 def check(browser: Browser, url: str, default_ua: str, timeout_ms: int, evaluate: Callable,
-          stop: Callable[[], bool] = lambda: False) -> dict:
+          stop: Callable[[], bool] = lambda: False, prepare: Callable | None = None) -> dict:
     snapshots = []
     for profile in PROFILES:
         if stop():
             break
-        snapshots.append(snapshot(browser, url, profile, default_ua, timeout_ms, evaluate))
+        snapshots.append(snapshot(browser, url, profile, default_ua, timeout_ms, evaluate, prepare))
     return {"url": url, "profiles": snapshots}

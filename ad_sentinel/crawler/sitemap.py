@@ -21,6 +21,8 @@ class Discovery:
     titles: dict[str, str] = field(default_factory=dict)
     sources: list[dict] = field(default_factory=list)
     missing: list[dict] = field(default_factory=list)
+    origin: str = ""
+    robots_txt: str | None = None
 
     def add(self, url: str, title: str = "") -> None:
         if url not in self.titles:
@@ -156,7 +158,13 @@ def discover(request: APIRequestContext, start_url: str, max_urls: int, explicit
         read(urljoin(origin + "/", url.strip()), "지정")
     if not auto:
         return result
-    robots = _get(request, origin + "/robots.txt", timeout_ms)
+    probe: list[dict] = []
+    robots = _get(request, origin + "/robots.txt", timeout_ms, probe)
+    result.origin = origin
+    if robots is not None:
+        result.robots_txt = robots.decode("utf-8", errors="ignore")
+    elif probe and probe[0]["reason"].startswith("HTTP 4"):
+        result.robots_txt = ""
     for url in sitemap_locations(robots.decode("utf-8", errors="ignore"), origin + "/") if robots else []:
         read(url, "robots.txt")
     for path in SITEMAP_CANDIDATES:

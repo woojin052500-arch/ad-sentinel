@@ -33,6 +33,8 @@ ERROR_PAGE_TEXT = re.compile(
     r"잘못된\s*(주소|경로|접근)|not\s*found|page\s*not|does\s*not\s*exist", re.IGNORECASE)
 FEED_PATH = re.compile(r"\.(xml|rss|atom)(\.gz)?$|/(rss|feed|atom)/?$", re.IGNORECASE)
 REPEAT_WARN = 3
+HEAVY_RESOURCE = re.compile(r"\.(?:woff2?|ttf|otf|eot|mp4|m4v|webm|ogv|ogg|oga|mp3|m4a|aac|wav|flac|avi|mov|wmv|m3u8|mpd)"
+                            r"(?:[?#]|$)", re.IGNORECASE)
 SHRINK_SETTLE_SEC = 5
 RATE_LIMIT_TEXT = re.compile(
     r"요청\s*(속도|횟수)?\s*제한|too\s*many\s*requests|rate\s*limit|과도한\s*(요청|접속)|"
@@ -75,6 +77,7 @@ class Crawler:
         self.home_screen: int | None = None
         self.repeat_warned: set[int] = set()
         self.throttle_streak = 0
+        self.blocked_resources = 0
         self.forbidden_streak = 0
 
     def run(self) -> dict:
@@ -134,6 +137,7 @@ class Crawler:
                 ignore_https_errors=True,
                 bypass_csp=True,
             )
+            self._prepare_context(context)
             try:
                 if mode == "site" and (cfg.use_sitemap or self.sitemap_urls):
                     added = self._add_sitemap_urls(context, start_url, queue, seen)
@@ -190,6 +194,7 @@ class Crawler:
 
         self._report(len(result["pages"]), "", 0)
         result["meta"]["final_delay_sec"] = self.delay
+        result["meta"]["blocked_resources"] = self.blocked_resources
         result["meta"]["gate"] = next((p["gate"] for p in result["pages"] if p.get("gate")), None)
         result["meta"]["repeated_screens"] = [
             {"title": self._screen_title(result, urls[0]), "count": len(urls), "urls": urls[:10]}
@@ -402,6 +407,17 @@ class Crawler:
         main = next((f for f in page_result["frames"] if f["is_main"]), None)
         page_result["title"] = main["title"] if main else ""
 
+    def _prepare_context(self, context) -> None:
+        if self.config.block_heavy_resources:
+            context.route(HEAVY_RESOURCE, self._block)
+
+    def _block(self, route) -> None:
+        self.blocked_resources += 1
+        try:
+            route.abort("blockedbyclient")
+        except PlaywrightError:
+            pass
+
     def _cloaking_reason(self, page_result: dict, first: bool) -> str:
         mode = self.config.cloaking_check
         if mode == CLOAKING_OFF or page_result.get("error") or self.stop_event.is_set():
@@ -436,7 +452,7 @@ class Crawler:
         log.info("  클로킹 검사(%s): 일반 PC·구글봇·구글 검색 경유·모바일로 각각 열어 비교", reason)
         started = time.monotonic()
         data = cloaking.check(browser, url, USER_AGENT, self.config.page_timeout_ms, self._evaluate,
-                              stop=self.stop_event.is_set)
+                              stop=self.stop_event.is_set, prepare=self._prepare_context)
         data["reason"] = reason
         page_result["cloaking"] = data
         failed = [p["label"] for p in data["profiles"] if p["error"]]
@@ -615,6 +631,8 @@ class Crawler:
             if titles:
                 notice.info("입장 후 새로 나타난 글 제목 %d개를 수집했습니다. (예: %s, 입장 전 화면 제목 %d개는 제외)",
                             len(titles), ", ".join(t[:20] for t in titles[:3]), len(titles_before))
+            elif page_result["gate"]["new_links"] or page_result["gate"]["url_changed"]:
+                log.info("  입장 후 새 링크 %d개로 게시판 페이지를 따로 점검합니다.", page_result["gate"]["new_links"])
             else:
                 notice.warning("입장 후 새로 나타난 글 제목이 없습니다. (입장 전 화면 제목 %d개는 제외) "
                                "피드 게시글을 수집하지 못했을 수 있습니다.", len(titles_before))
@@ -738,6 +756,8 @@ class Crawler:
         except Exception as e:
             log.warning("sitemap·RSS 읽기 실패: %s", e)
             return {"files": [], "sources": [], "urls": 0}
+        if self.robots and found.robots_txt is not None:
+            self.robots.preload(found.origin, found.robots_txt)
         added = 0
         for raw in found.pages:
             u = normalize_url(raw)
@@ -819,8 +839,19 @@ class Crawler:
         if gate:
             return [f"입장 버튼을 누른 뒤에도 발견한 링크가 적어 {checked}페이지만 점검했습니다. "
                     "입장 후 주소를 시작 주소로 넣거나, 사이트에 sitemap.xml이 있는지 확인해 보세요."]
+        if not self._may_have_missed(pages[0]):
+            return []
         return [f"발견한 링크가 적어 {checked}페이지만 점검했습니다. "
                 "입장 버튼이 있는 사이트라면 입장 후 주소를 시작 주소로 넣어보세요."]
+
+    def _may_have_missed(self, first: dict) -> bool:
+        base = first.get("final_url") or first["url"]
+        links = {normalize_url(r.get("href", ""), base) for r in first["elements"]
+                 if r["type"] == "link" and not is_boilerplate_link(r)}
+        if len(links - {""}) >= self.config.gate_link_threshold:
+            return False
+        attempt = first.get("gate_attempt") or {}
+        return not self.config.enter_gate or attempt.get("changed") is False
 
     def _evaluate(self, frame: Frame, js: str, arg, timeout_ms: int):
         expression = "(arg) => ({ value: (" + js + ")(arg) })"
