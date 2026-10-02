@@ -1,5 +1,6 @@
 import argparse
 import logging
+import os
 import sys
 
 from ad_sentinel.config import CrawlConfig
@@ -96,12 +97,27 @@ def print_report(report: dict) -> None:
         print(f"\n화이트리스트에 없는 외부 도메인 {len(unknown)}개: {', '.join(unknown[:20])}")
 
 
+def attach_console() -> None:
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    stream = None
+    if sys.platform == "win32":
+        import ctypes
+
+        if ctypes.windll.kernel32.AttachConsole(-1):
+            stream = open("CONOUT$", "w", errors="replace")
+    stream = stream or open(os.devnull, "w")
+    sys.stdout = sys.stdout or stream
+    sys.stderr = sys.stderr or stream
+
+
 def main(argv=None) -> int:
     if argv is None and len(sys.argv) == 1:
         from ad_sentinel.gui import run_gui
 
         run_gui()
         return 0
+    attach_console()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
     args = parse_args(argv)
 

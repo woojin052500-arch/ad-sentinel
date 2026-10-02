@@ -2,7 +2,7 @@ import re
 from pathlib import Path
 
 from ad_sentinel.detector.keywords import ADULT, GAMBLING
-from ad_sentinel.paths import app_dir
+from ad_sentinel.paths import data_dir
 
 DEFAULT_WHITELIST = (
     "go.kr", "gov.kr", "mil.kr", "korea.kr", "korea.net",
@@ -26,7 +26,7 @@ SUSPICIOUS_TOKENS = {
 def load_whitelist(extra: list[str] | None = None, path: Path | None = None) -> set[str]:
     domains = set(DEFAULT_WHITELIST)
     domains.update(d.strip().lower() for d in (extra or []) if d.strip())
-    path = path or app_dir() / WHITELIST_FILE
+    path = path or data_dir() / WHITELIST_FILE
     if path.is_file():
         for line in path.read_text(encoding="utf-8").splitlines():
             line = line.strip().lower()
@@ -55,7 +55,7 @@ def suspicious_domain(host: str) -> str | None:
 
 
 def user_whitelist_path() -> Path:
-    return app_dir() / WHITELIST_FILE
+    return data_dir() / WHITELIST_FILE
 
 
 def read_user_whitelist() -> list[str]:

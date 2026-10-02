@@ -4,6 +4,7 @@ import queue
 import threading
 import time
 import tkinter as tk
+import traceback
 import webbrowser
 from datetime import datetime
 from pathlib import Path
@@ -12,13 +13,14 @@ from tkinter import filedialog, font, messagebox, ttk
 from ad_sentinel import __version__
 from ad_sentinel.config import CLOAKING_MODES, CLOAKING_OFF, OWN_SITE_LABEL, ROBOTS_IGNORE_WARNING, CrawlConfig
 from ad_sentinel.crawler import Crawler
+from ad_sentinel.crawler.browser import BROWSER_ERROR_TITLE, BrowserLaunchError
 from ad_sentinel.detector import detect
 from ad_sentinel.detector.domains import DEFAULT_WHITELIST, read_user_whitelist, save_user_whitelist
 from ad_sentinel.gui import winicon
 from ad_sentinel.gui.tooltip import HelpIcon, Tooltip, help_content
 from ad_sentinel.help_texts import (COLUMNS, QUICK_START, QUICK_START_FOOTER, QUICK_START_TITLE, SETTINGS,
                                     UNCHECKED, estimate_text, quick_start_text)
-from ad_sentinel.paths import app_dir, asset_path, output_dir
+from ad_sentinel.paths import asset_path, data_dir, output_dir
 from ad_sentinel.report import (display_url, export_csv, export_html, export_json, location_text,
                                 reflected_text, stats_lines)
 from ad_sentinel.storage import load_json, save_json
@@ -33,6 +35,7 @@ MAX_LOG_LINES = 3000
 HINT_COLOR = "#6b7280"
 RESIZE_SETTLE_MS = 150
 POLL_MS = 200
+MIN_WIDTH, MIN_HEIGHT = 560, 560
 UI_SETTINGS_FILE = "ui_settings.json"
 ICON_PHOTO_SIZES = (256, 64, 48, 32, 24, 16)
 
@@ -100,7 +103,7 @@ class App(tk.Tk):
         self.wrap_labels: list[ttk.Label] = []
 
         self._build()
-        self._fit_window(1280, 800, 1000, 700)
+        self._fit_window(1280, 800, MIN_WIDTH, MIN_HEIGHT)
         self._resize_job: str | None = None
         self._last_size = (0, 0)
         self.bind("<Configure>", self._on_configure, add="+")
@@ -124,11 +127,50 @@ class App(tk.Tk):
     def _fit_window(self, width: int, height: int, min_width: int, min_height: int):
         self.update_idletasks()
         screen_w, screen_h = self.winfo_screenwidth(), self.winfo_screenheight()
-        need_w = max(self.px(min_width), self.winfo_reqwidth())
+        need_w = self.content.winfo_reqwidth()
         w = min(max(self.px(width), need_w), screen_w - self.px(40))
         h = min(self.px(height), screen_h - self.px(80))
         self.geometry(f"{w}x{h}+{max(0, (screen_w - w) // 2)}+{max(0, (screen_h - h) // 3)}")
-        self.minsize(min(need_w, w), min(self.px(min_height), h))
+        self.minsize(min(self.px(min_width), w), min(self.px(min_height), h))
+
+    def _layout_viewport(self, width: int | None = None, height: int | None = None):
+        if self._in_layout:
+            return
+        self._in_layout = True
+        try:
+            self.update_idletasks()
+        finally:
+            self._in_layout = False
+        width = self.viewport.winfo_width() if width is None else width
+        height = self.viewport.winfo_height() if height is None else height
+        need = self.content.winfo_reqwidth()
+        full = max(width, need)
+        self.viewport.itemconfigure(self.content_item, width=full, height=height)
+        self.viewport.configure(scrollregion=(0, 0, full, height))
+        if need > width + 1:
+            if not self.hbar.winfo_ismapped():
+                self.hbar.pack(side="bottom", fill="x", before=self.viewport)
+        elif self.hbar.winfo_ismapped():
+            self.hbar.pack_forget()
+        if need <= width:
+            self.viewport.xview_moveto(0)
+        if need != self._laid_out_need:
+            self._laid_out_need = need
+            self.after_idle(self._layout_viewport)
+
+    def _relayout(self):
+        self.after_idle(self._layout_viewport)
+
+    def report_callback_exception(self, exc, value, tb):
+        logging.getLogger("ad_sentinel").error("화면 처리 오류", exc_info=(exc, value, tb))
+        path = data_dir() / "error.log"
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] v{__version__} 화면 처리 오류\n")
+                f.write("".join(traceback.format_exception(exc, value, tb)) + "\n")
+        except OSError:
+            pass
+        messagebox.showerror("오류", f"화면 처리 중 오류가 났습니다: {value}\n\n오류 기록: {path}", parent=self)
 
     def _apply_native_icon(self):
         problem = _set_native_icon(self)
@@ -158,8 +200,16 @@ class App(tk.Tk):
 
     def _build(self):
         pad = self.px(6)
-        root = ttk.Frame(self, padding=self.px(10))
-        root.pack(fill="both", expand=True)
+        self._laid_out_need = 0
+        self._in_layout = False
+        self.viewport = tk.Canvas(self, highlightthickness=0, borderwidth=0, background=_theme_background(self))
+        self.hbar = ttk.Scrollbar(self, orient="horizontal", command=self.viewport.xview)
+        self.viewport.configure(xscrollcommand=self.hbar.set)
+        self.viewport.pack(side="top", fill="both", expand=True)
+        root = ttk.Frame(self.viewport, padding=self.px(10))
+        self.content = root
+        self.content_item = self.viewport.create_window(0, 0, window=root, anchor="nw")
+        self.viewport.bind("<Configure>", lambda e: self._layout_viewport(e.width, e.height))
 
         mode_box = ttk.LabelFrame(root, text="1. 점검 방식", padding=pad)
         mode_box.pack(fill="x")
@@ -354,12 +404,14 @@ class App(tk.Tk):
         _apply_theme(self, self.scale, self.light_ui.get())
         background = _theme_background(self)
         self.configure(background=background)
+        self.viewport.configure(background=background)
         ttk.Style(self).configure("TLabelframe.Label", font=_bold_font())
         self._table_style()
         for icon in self.help_icons.values():
             icon.configure(background=background)
         self.ui_settings["light_ui"] = self.light_ui.get()
         save_ui_settings(self.ui_settings)
+        self._relayout()
 
     def _heading_help(self, event) -> tuple[str, str] | None:
         if event is None or self.table.identify_region(event.x, event.y) != "heading":
@@ -445,6 +497,7 @@ class App(tk.Tk):
         else:
             self.site_frame.pack_forget()
             self.list_frame.pack(fill="x")
+        self._relayout()
 
     def _on_own_site(self):
         if self.own_site.get():
@@ -472,6 +525,7 @@ class App(tk.Tk):
             self.advanced_frame.pack(fill="x", pady=(self.px(6), 0))
         else:
             self.advanced_frame.pack_forget()
+        self._relayout()
 
     def _make_config(self) -> CrawlConfig | None:
         try:
@@ -548,9 +602,12 @@ class App(tk.Tk):
             report = detect(crawl)
             report_path = save_json(report, prefix="detect")
             self.events.put(("done", crawl, report, crawl_path, report_path))
+        except BrowserLaunchError as e:
+            self.events.put(("error", str(e), BROWSER_ERROR_TITLE))
         except Exception as e:
             logging.getLogger("ad_sentinel").exception("점검 중 오류")
-            self.events.put(("error", str(e)))
+            path = write_error_log("점검 중 오류")
+            self.events.put(("error", f"{e}\n\n오류 기록: {path}", "오류"))
 
     def _on_progress(self, done: int, total: int, url: str):
         self.events.put(("progress", done, total, url))
@@ -614,8 +671,8 @@ class App(tk.Tk):
         elif kind == "error":
             self._set_running(False)
             self.status.set("오류로 점검을 마치지 못했습니다.")
-            self._say(f"오류로 점검을 마치지 못했습니다: {event[1]}")
-            messagebox.showerror("오류", event[1])
+            self._say(f"오류로 점검을 마치지 못했습니다: {event[1].splitlines()[0]}")
+            messagebox.showerror(event[2] if len(event) > 2 else "오류", event[1], parent=self)
 
     def _set_running(self, running: bool):
         state = "disabled" if running else "normal"
@@ -688,6 +745,7 @@ class App(tk.Tk):
             self.unchecked_text.set(f"⚠ 점검하지 못한 영역 {unchecked}곳")
             self.unchecked_button.grid(row=0, column=1, padx=(self.px(12), self.px(3)))
             self.unchecked_help.grid(row=0, column=2, sticky="w")
+        self._relayout()
         self._show_overview()
 
     def _show_overview(self):
@@ -932,7 +990,7 @@ def _bold_font() -> tuple:
 
 def load_ui_settings() -> dict:
     try:
-        data = json.loads((app_dir() / UI_SETTINGS_FILE).read_text(encoding="utf-8"))
+        data = json.loads((data_dir() / UI_SETTINGS_FILE).read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}
@@ -940,7 +998,7 @@ def load_ui_settings() -> dict:
 
 def save_ui_settings(settings: dict) -> None:
     try:
-        (app_dir() / UI_SETTINGS_FILE).write_text(json.dumps(settings, ensure_ascii=False), encoding="utf-8")
+        (data_dir() / UI_SETTINGS_FILE).write_text(json.dumps(settings, ensure_ascii=False), encoding="utf-8")
     except OSError:
         pass
 
@@ -1018,7 +1076,33 @@ def _set_native_icon(window: tk.Tk) -> str:
     return ""
 
 
+def write_error_log(context: str) -> Path:
+    path = data_dir() / "error.log"
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] v{__version__} {context}\n{traceback.format_exc()}\n")
+    except OSError:
+        pass
+    return path
+
+
+def _show_startup_error(path: Path) -> None:
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror(APP_TITLE, "프로그램을 시작하지 못했습니다.\n\n"
+                                        f"오류 기록 파일을 담당자에게 보내 주세요:\n{path}", parent=root)
+        root.destroy()
+    except tk.TclError:
+        pass
+
+
 def run_gui():
     winicon.set_dpi_awareness()
     winicon.set_app_user_model_id()
-    App().mainloop()
+    try:
+        app = App()
+    except Exception:
+        _show_startup_error(write_error_log("시작 오류"))
+        raise
+    app.mainloop()

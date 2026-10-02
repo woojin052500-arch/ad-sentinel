@@ -10,3 +10,4 @@ dist/
 
 output/
 ui_settings.json
+.build-venv/

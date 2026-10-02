@@ -13,8 +13,35 @@ def app_dir() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+APP_NAME = "AD-Sentinel"
+_data_dir: Path | None = None
+
+
+def _writable(folder: Path) -> bool:
+    probe = folder / ".write_test"
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        probe.write_text("", encoding="utf-8")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def data_dir() -> Path:
+    global _data_dir
+    if _data_dir is None:
+        base = app_dir()
+        if not _writable(base):
+            root = os.environ.get("LOCALAPPDATA") or str(Path.home())
+            base = Path(root) / APP_NAME
+            base.mkdir(parents=True, exist_ok=True)
+        _data_dir = base
+    return _data_dir
+
+
 def output_dir() -> Path:
-    path = app_dir() / "output"
+    path = data_dir() / "output"
     path.mkdir(parents=True, exist_ok=True)
     return path
 

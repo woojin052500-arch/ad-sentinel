@@ -12,7 +12,7 @@
 | 1 | 크롤러 (Playwright 렌더링, iframe·숨김 요소 수집) | ✅ |
 | 2 | 탐지·분류 (키워드·숨김·도메인 점수, 화이트리스트, 페이지 간 묶기) | ✅ |
 | 3 | GUI (사이트 점검, URL 목록 점검, 결과 상세, 보고서 내보내기) | ✅ |
-| 4 | Windows exe 빌드 (PyInstaller) | ⏳ |
+| 4 | Windows exe 빌드 (PyInstaller onedir, Edge 사용) | ✅ (Windows 실기 확인 필요) |
 | 5 | 문서 (매뉴얼, 사용설명서, 기획서) | ⏳ |
 
 ## 폴더 구조
@@ -25,12 +25,12 @@ ad-sentinel/
 ├── requirements-dev.txt       # 개발·테스트·빌드용 패키지
 ├── ad_sentinel/
 │   ├── config.py              # 크롤링 설정값 (CrawlConfig)
-│   ├── paths.py               # exe/소스 실행 경로 차이 처리 (PyInstaller 대응)
+│   ├── paths.py               # exe/소스 실행 경로 차이 처리, 쓰기 불가 폴더면 %LOCALAPPDATA%\AD-Sentinel 사용
 │   ├── storage.py             # 결과 JSON 저장·읽기
 │   ├── crawler/               # [1단계] 크롤러
 │   │   ├── crawler.py         #   BFS 탐색, 페이지·프레임별 수집
 │   │   ├── extract_js.py      #   브라우저 안에서 실행되는 추출 스크립트 (숨김 판정 포함)
-│   │   ├── browser.py         #   브라우저 자동 탐색 (Chromium → Edge → Chrome)
+│   │   ├── browser.py         #   브라우저 자동 탐색 (Edge → Chrome → Playwright Chromium), 실패 시 한국어 안내
 │   │   ├── robots.py          #   robots.txt 준수 (sitemap 탐색 때 받은 robots.txt를 재사용해 한 번만 요청)
 │   │   ├── gate.py            #   관문(입장 버튼) 찾기, 위험 버튼 제외 목록
 │   │   ├── cloaking.py        #   클로킹 검사: 일반 PC·구글봇·구글 검색 경유·모바일로 열어 비교
@@ -60,8 +60,15 @@ ad-sentinel/
 │   ├── test_heavy.py
 │   ├── test_detector.py
 │   └── test_reflection.py
-├── packaging/                 # [4단계] PyInstaller 설정, make_icon.py(아이콘 생성)
-└── docs/                      # [5단계] 매뉴얼·사용설명서·기획서 (예정)
+├── packaging/                 # [4단계] exe 빌드
+│   ├── ad_sentinel.spec       #   PyInstaller 설정 (onedir, 콘솔 없음, 아이콘·버전 정보, 데이터 파일)
+│   ├── build.bat              #   빌드 자동화 (가상 환경 → 설치 → 빌드 → 라이선스 복사 → zip)
+│   ├── collect_licenses.py    #   배포 폴더에 오픈소스 라이선스 원문 복사
+│   └── make_icon.py           #   아이콘 생성
+├── requirements-build.txt     # 빌드용 패키지 (ASCII만)
+├── THIRD_PARTY_NOTICES.txt    # 제3자 구성요소 고지 (배포 폴더에 복사)
+└── docs/
+    └── 빌드_매뉴얼.md           # 필요 프로그램 설치부터 exe 생성까지, cp949 주의, 깨끗한 PC 확인 항목
 ```
 
 ## 화면 사용법 (GUI)
@@ -145,7 +152,7 @@ python demo_server.py            # 기본 포트 8000, --port 로 변경
 - 고해상도(DPI 배율 125%·150% 등): 프로세스 DPI 인식을 **시스템 단위**(`SetProcessDpiAwareness(1)`, 파이썬 IDLE과 같은 방식)로 켜고,
   창 크기·열 너비·테마 글꼴(픽셀 단위)을 배율에 맞춰 키웁니다. 모니터별(Per-Monitor) 인식은 Tk 8.6이 모니터 사이 배율 변경을
   처리하지 못해 글자 잘림·겹침이 생길 수 있어 쓰지 않습니다.
-- 창 크기: 최소 크기는 화면 내용이 필요로 하는 폭 이상으로 정해, 가장 작게 줄여도 모든 버튼이 보입니다. 결과 영역 윗줄은
+- 창 크기: 화면 내용보다 창이 좁으면 가로 스크롤 막대가 생겨 모든 버튼에 닿을 수 있습니다. (스냅·최대화 때 왼쪽 잘림 방지) 결과 영역 윗줄은
   저장 버튼을 먼저 배치하고 요약 문구가 줄어들게 했습니다. 크기를 바꾸는 동안에는 말풍선을 닫고, 안내 문구 줄바꿈 폭은
   크기 조절이 멈춘 뒤(0.15초) 한 번만 다시 계산합니다. 창 바탕색을 테마 색과 맞춰 크기 조절 중 깜빡임을 줄였습니다.
 - 아이콘: `ad_sentinel/assets/icon.ico`(창·exe 공용)와 `icon.png`·`icon_16~64.png`. `python packaging/make_icon.py`로 다시 만들 수 있습니다.
@@ -153,13 +160,34 @@ python demo_server.py            # 기본 포트 8000, --port 로 변경
   한 번 더 지정합니다. (한글이 들어간 폴더 경로에서도 동작) 작업 표시줄이 python.exe 아이콘 대신 전용 아이콘을 쓰도록
   `SetCurrentProcessExplicitAppUserModelID`로 앱 ID(`ADSentinel.PublicWebAdScanner`)를 정합니다. 아이콘 설정에 실패하면 상세 로그에 이유가 남습니다.
 
+## exe 빌드 (4단계)
+
+자세한 내용은 [docs/빌드_매뉴얼.md](docs/빌드_매뉴얼.md)에 있습니다. Python 3.12를 설치한 Windows PC에서:
+
+```bat
+packaging\build.bat
+```
+
+- 결과: `dist\AD-Sentinel\AD-Sentinel.exe`(폴더째 배포)와 `dist\AD-Sentinel-<버전>-win64.zip`
+- **onedir** 방식: onefile은 실행할 때마다 약 170MB를 임시 폴더에 풀어 느리고, 자기 압축을 푸는 동작 때문에 백신 오탐이 잦아 쓰지 않았습니다.
+- 콘솔 창 없음, 방패 아이콘(exe·창·작업 표시줄), 버전 정보 포함, UPX 압축 안 함
+- 브라우저는 넣지 않고 PC의 **Microsoft Edge**를 씁니다(없으면 Chrome). 못 찾으면 해결 방법이 적힌 한국어 안내 창을 띄웁니다.
+- `output\`, `whitelist.txt`, `ui_settings.json`, `error.log`는 exe 옆에 만들고, 쓸 수 없는 폴더면 `%LOCALAPPDATA%\AD-Sentinel\`에 만듭니다.
+- 시작 중 오류나 화면 처리 오류는 `error.log`에 기록하고 위치를 알려 줍니다.
+- 명령 프롬프트에서 `AD-Sentinel.exe <주소>`처럼 인자를 주면 CLI로 동작하고 결과를 그 콘솔에 출력합니다.
+- 같은 spec으로 리눅스에서 빌드해 본 결과(약 173MB, 그중 Playwright 드라이버 135MB) 시연 사이트·클로킹·UTS #39 변형 탐지가
+  소스 실행과 똑같이 나오고, 결과가 exe 옆 `output\`에 저장되는 것을 확인했습니다. Windows 실기 확인은 매뉴얼 8장 항목으로 합니다.
+
+**창 크기**: 최소 크기를 작게(560×560 기준, 배율 반영) 두고, 창이 화면 내용보다 좁으면 아래에 가로 스크롤 막대를 띄웁니다.
+최소 크기가 화면 절반보다 크면 Windows 스냅(화면 절반·1/3)이 창을 강제로 넓히면서 왼쪽이 화면 밖으로 밀리던 문제를 막기 위함입니다.
+
 ## 설치 및 실행 (개발 환경)
 
 ```bash
 python -m venv .venv
 .venv\Scripts\activate            # Windows
 pip install -r requirements-dev.txt
-playwright install chromium       # 생략 시 Windows 기본 Edge를 자동 사용
+playwright install chromium       # 선택: Edge·Chrome이 없는 개발 PC에서만 필요
 
 python main.py https://www.example.go.kr --max-pages 20
 python main.py --url-list 페이지.csv                            # URL 목록 점검
@@ -504,6 +532,8 @@ python -m pytest
 `test_resources.py`는 글꼴·영상·음성 요청을 막아도 이미지·CSS 배경·iframe은 그대로 요청하고, 막은 경우와 막지 않은 경우의 탐지 결과(이미지 alt 광고,
 1px iframe 속 광고, 숨김 링크)가 똑같은지 검증합니다. `test_trends.py`는 같은 주소를 두 번 요청하지 않는지(robots.txt 포함), 작은 사이트·한 페이지
 화면에서 "링크가 적어" 안내가 나오지 않는지, 입장 후 새 링크가 생긴 사이트에서 피드 경고가 나오지 않는지도 검증합니다.
+`test_packaging.py`는 브라우저 시도 순서(Edge 먼저)와 한국어 안내 문구, 쓰기 불가 폴더일 때 `%LOCALAPPDATA%` 사용, spec 설정(데이터 파일 포함,
+demo_server·tests 제외, 콘솔 없음, UPX 미사용), 빌드 입력 파일의 ASCII·CRLF, CLI 콘솔 연결을 검증합니다.
 `test_softerr.py`는 sitemap 주소를 시작 주소에 넣은 경우, 소프트 404·HTTP 404 시작 페이지의 "홈으로 돌아가기" 미클릭, 게시글 페이지에서 재클릭이 홈으로 이동할 때 결과 폐기와 3회 후 중단, 같은 화면 반복 경고를 검증합니다.
 `test_bulk.py`는 비표준 위치 sitemap(`/all/sitemap.xml`)·RSS 자동 탐색, 직접 지정한 Atom 피드, 최대 페이지 수 제한 안내, 429·속도 제한 안내 페이지 이동 시 재시도와 간격 증가, 계속 차단될 때 중단 안내, 게시글 페이지의 입장 버튼 재클릭과 게시글 제목 표시를 검증합니다.
 `test_gate.py`는 입장 버튼 사이트(위험 버튼이 눌리지 않았는지 서버 요청 기록으로 확인), 주소가 바뀌지 않는 SPA, sitemap 사이트, 적게 끝났을 때 안내, 방문 금지 주소, 커뮤니티형 사이트(입장 버튼 + 푸터 링크 6개 + sitemap에는 고정 페이지만, 버튼 뒤에 게시판), 콘텐츠가 많은 페이지의 약한 문구 버튼 미클릭, 피드형 SPA(앵커 메뉴가 있는 랜딩 → `javascript:` 입장 버튼 → 로딩 화면 → 주소 그대로인 피드 → 약관 동의 시트·디스코드 팝업 → 흐린 이미지의 "클릭하여 더보기" → 스크롤 로딩 3회 + 더 불러오기 2회)에서 추가로 불러온 게시글 속 광고 탐지와 동의·가입·이미지 보기 버튼 미클릭을 검하고, 입장 후 글자가 크게 줄어드는 로딩 화면(진행 막대 있음·없음, 3.5초·8초)에서 피드가 뜰 때까지 기다려 게시글 20개를 모두 모으는지, 끝나지 않는 로딩은 경고하는지, 입장 전 랜딩 화면 제목을 새 글 제목으로 세지 않는지, 자동화 브라우저에서 로딩 화면이 끝나지 않고 보안 안내 문구가 있을 때 봇 차단 안내와 화면 캡처 2장을 남기는지 검증합니다.

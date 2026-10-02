@@ -183,22 +183,48 @@ def _visible_controls(widget):
 
 
 @pytest.mark.parametrize("mode", ["site", "list"])
-def test_all_controls_fit_at_minimum_size(app, mode):
+def test_all_controls_fit_at_content_width(app, mode):
     app.mode.set(mode)
     app._on_mode_change()
     app.show_advanced.set(True)
     app._toggle_advanced()
     crawl = json.loads((Path(__file__).parent / "fixtures" / "mois_sample.json").read_text(encoding="utf-8"))
     app._show_report(crawl, detect(crawl))
-    min_w, min_h = app.minsize()
-    app.geometry(f"{min_w}x{min_h}")
     app.update()
+    need = app.content.winfo_reqwidth()
+    app.geometry(f"{need}x{app.minsize()[1] + 200}")
+    app.update()
+    assert not app.hbar.winfo_ismapped()
     right = app.winfo_rootx() + app.winfo_width()
-    controls = list(_visible_controls(app))
+    controls = [c for c in _visible_controls(app) if c is not app.viewport]
     assert len(controls) > 20
     clipped = [(c.winfo_class(), c.cget("text") if c.winfo_class() != "Canvas" else "?")
                for c in controls if c.winfo_rootx() + c.winfo_width() > right + 1 or c.winfo_width() < c.winfo_reqwidth()]
     assert clipped == []
+
+
+@pytest.mark.parametrize("width", [700, "min"])
+def test_narrow_window_scrolls_instead_of_clipping(app, width):
+    crawl = json.loads((Path(__file__).parent / "fixtures" / "mois_sample.json").read_text(encoding="utf-8"))
+    app._show_report(crawl, detect(crawl))
+    width = app.minsize()[0] if width == "min" else width
+    assert app.minsize()[0] <= width <= 700
+    app.geometry(f"{width}x700")
+    app.update()
+    need = app.content.winfo_reqwidth()
+    assert app.winfo_width() == width and need > width
+    assert app.hbar.winfo_ismapped()
+    assert float(app.viewport.cget("scrollregion").split()[2]) == need
+    left = app.winfo_rootx()
+    assert app.start_button.winfo_rootx() >= left
+    html_button = next(c for c in _visible_controls(app) if c.winfo_class() == "TButton"
+                       and c.cget("text") == "HTML 보고서로 저장")
+    app.viewport.xview_moveto(1.0)
+    app.update()
+    assert html_button.winfo_rootx() + html_button.winfo_width() <= left + app.winfo_width() + 1
+    app.geometry(f"{need + 40}x700")
+    app.update()
+    assert not app.hbar.winfo_ismapped() and app.start_button.winfo_rootx() >= left
 
 
 def test_resize_is_debounced(app, monkeypatch):
@@ -277,7 +303,7 @@ def test_progress_events_are_coalesced(app, monkeypatch):
 def test_light_ui_toggle_is_saved(app, monkeypatch, tmp_path):
     import ad_sentinel.gui.app as gui
 
-    monkeypatch.setattr(gui, "app_dir", lambda: tmp_path)
+    monkeypatch.setattr(gui, "data_dir", lambda: tmp_path)
     style = ttk_style(app)
     app.light_ui.set(True)
     app._toggle_light_ui()
@@ -309,3 +335,23 @@ def gui_font(app):
     from ad_sentinel.gui.app import _font_of
 
     return _font_of("Treeview") or tkfont.nametofont("TkDefaultFont")
+
+
+def test_browser_error_dialog_and_error_log(app, monkeypatch, tmp_path):
+    import ad_sentinel.gui.app as gui
+    from ad_sentinel.crawler.browser import BROWSER_ERROR_TITLE
+
+    shown = []
+    monkeypatch.setattr(gui.messagebox, "showerror", lambda title, message, **kw: shown.append((title, message)))
+    app._handle_event(("error", "점검에 쓰는 브라우저(Microsoft Edge)를 실행하지 못했습니다.\n\n자세한 오류", BROWSER_ERROR_TITLE))
+    assert shown[-1][0] == "브라우저를 실행하지 못했습니다"
+    app._flush_log()
+    assert "브라우저(Microsoft Edge)를 실행하지 못했습니다" in app.log.get("1.0", "end")
+
+    monkeypatch.setattr(gui, "data_dir", lambda: tmp_path)
+    try:
+        raise ValueError("테스트 오류")
+    except ValueError:
+        path = gui.write_error_log("시작 오류")
+    text = path.read_text(encoding="utf-8")
+    assert path == tmp_path / "error.log" and "시작 오류" in text and "ValueError: 테스트 오류" in text

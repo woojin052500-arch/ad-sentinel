@@ -6,7 +6,19 @@ AD Sentinel - 제3자 구성요소 고지 (Third-Party Notices)
    - 버전: Unicode 18.0.0 (2026-08-06), 원본 파일을 수정 없이 포함
    - 출처: https://www.unicode.org/Public/security/ (UTS #39: https://www.unicode.org/reports/tr39/)
    - 용도: 닮은꼴 문자(confusable)를 기본 라틴 문자로 바꿔 불법광고 키워드의 우회 표기를 찾는 데 사용
-   - 라이선스: Unicode License V3 (SPDX: Unicode-3.0), 전문은 아래와 같습니다.
+   - 라이선스: Unicode License V3 (SPDX: Unicode-3.0), 전문은 아래 3번 항목에 있습니다.
+
+2. 실행 파일(exe)에 함께 들어가는 구성요소
+   배포 폴더의 licenses\ 폴더에 각 구성요소의 라이선스 원문이 들어 있습니다. (packaging\collect_licenses.py가 빌드 때 복사)
+   - Python 런타임 (Python Software Foundation License)                  licenses\python\
+   - Tcl/Tk (Tcl/Tk License, BSD 계열) - Python에 포함
+   - Playwright for Python (Apache License 2.0)                         licenses\playwright\
+   - Playwright 드라이버와 Node.js 런타임 (Apache 2.0 / MIT 등)          licenses\playwright-driver\, licenses\playwright-driver-node\
+   - sv-ttk, Sun Valley ttk 테마 (MIT License)                          licenses\sv-ttk\
+   - PyInstaller 부트로더 (GPL 2.0 + 부트로더 예외 조항)                  licenses\pyinstaller\
+   - 웹 브라우저는 포함하지 않으며, PC에 설치된 Microsoft Edge(또는 Chrome)를 사용합니다.
+
+3. Unicode License V3 전문 (1번 항목)
 
 UNICODE LICENSE V3
 
